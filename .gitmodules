@@ -1,0 +1,3 @@
+[submodule "lib/libsdi12"]
+	path = lib/libsdi12
+	url = https://github.com/phillipweinstock/libsdi12.git

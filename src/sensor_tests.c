@@ -1,0 +1,859 @@
+/**
+ * @file sensor_tests.c
+ * @brief SDI-12 sensor compliance tests (21 tests).
+ *
+ * Each test exercises a specific aspect of the SDI-12 v1.4 specification.
+ * Tests use the libsdi12 master API through the timing interposition
+ * layer to measure both correctness and timing compliance.
+ *
+ * Spec section references follow the SDI-12 v1.4 (February 2023) document.
+ */
+#include "verifier.h"
+#include "sdi12.h"
+#include "sdi12_master.h"
+#include <stdio.h>
+#include <string.h>
+
+/* ── Helpers ───────────────────────────────────────────────────────── */
+
+static bool valid_sdi12_addr(char c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z');
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  1. Acknowledge (a!)
+ *  §4.4.2 — Sensor must respond with "a\r\n"
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_acknowledge(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Acknowledge (a!)", "\xc2\xa7" "4.4.2");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    bool present = false;
+    sdi12_err_t err = sdi12_master_acknowledge(timing_master(ctx), addr, &present);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Command failed with error %d", err);
+        return r;
+    }
+    if (!present) {
+        TEST_FAIL_MSG(r, "No response from sensor at address '%c'", addr);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    if (r.measured_us > r.spec_limit_us) {
+        TEST_FAIL_MSG(r, "Response too slow: %.3f ms (max %.3f ms)",
+                      r.measured_us / 1000.0, r.spec_limit_us / 1000.0);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Acknowledged in %.3f ms", r.measured_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  2. Query Address (?!)
+ *  §4.4.1 — Returns "a\r\n" (single sensor on bus)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_query_address(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Query Address (?!)", "\xc2\xa7" "4.4.1");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    char queried = 0;
+    sdi12_err_t err = sdi12_master_query_address(timing_master(ctx), &queried);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Query failed with error %d", err);
+        return r;
+    }
+    if (!valid_sdi12_addr(queried)) {
+        TEST_FAIL_MSG(r, "Invalid address returned: 0x%02X", (unsigned char)queried);
+        return r;
+    }
+    if (queried != addr) {
+        TEST_FAIL_MSG(r, "Expected '%c', got '%c'", addr, queried);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    TEST_PASS_MSG(r, "Address '%c' confirmed in %.3f ms", queried, r.measured_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  3. Identify (aI!)
+ *  §4.4.3 — Response: "allccccccccmmmmmmvvvxxxxxxxxx...\r\n"
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_identify(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Identify (aI!)", "\xc2\xa7" "4.4.3");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_ident_t ident;
+    sdi12_err_t err = sdi12_master_identify(timing_master(ctx), addr, &ident);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Identify failed with error %d", err);
+        return r;
+    }
+
+    /* Check vendor is not empty */
+    bool vendor_empty = true;
+    for (int i = 0; i < SDI12_ID_VENDOR_LEN; i++) {
+        if (ident.vendor[i] != '\0' && ident.vendor[i] != ' ') {
+            vendor_empty = false;
+            break;
+        }
+    }
+    if (vendor_empty) {
+        TEST_FAIL_MSG(r, "Vendor field is empty");
+        return r;
+    }
+
+    /* Check model is not empty */
+    bool model_empty = true;
+    for (int i = 0; i < SDI12_ID_MODEL_LEN; i++) {
+        if (ident.model[i] != '\0' && ident.model[i] != ' ') {
+            model_empty = false;
+            break;
+        }
+    }
+    if (model_empty) {
+        TEST_FAIL_MSG(r, "Model field is empty");
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    TEST_PASS_MSG(r, "Vendor=%.8s Model=%.6s FW=%.3s Serial=%s",
+                  ident.vendor, ident.model, ident.firmware_version, ident.serial);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  4. Wrong Address Silence
+ *  §4.3 — Sensor must NOT respond to commands for other addresses
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_wrong_address_silence(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Wrong Address Silence", "\xc2\xa7" "4.3");
+
+    char wrong = (addr == '0') ? '1' : '0';
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    bool present = false;
+    sdi12_master_acknowledge(timing_master(ctx), wrong, &present);
+
+    if (present) {
+        TEST_FAIL_MSG(r, "Sensor responded to wrong address '%c'", wrong);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Correctly silent for address '%c'", wrong);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  5. Response Timing (<=15ms)
+ *  §4.2.3 — Sensor must respond within 15ms of command stop bit
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_response_timing(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Response Timing (<=15ms)", "\xc2\xa7" "4.2.3");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    bool present = false;
+    sdi12_master_acknowledge(timing_master(ctx), addr, &present);
+
+    if (!present) {
+        TEST_ERROR_MSG(r, "No response, cannot measure timing");
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    if (r.measured_us > r.spec_limit_us) {
+        TEST_FAIL_MSG(r, "%.3f ms exceeds 15ms limit", r.measured_us / 1000.0);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "%.3f ms (limit: %.3f ms)",
+                  r.measured_us / 1000.0, r.spec_limit_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  6. Inter-Character Gap (<=1.66ms)
+ *  §4.2.4 — Max gap between characters within a response
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_interchar_gap(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Inter-Character Gap (<=1.66ms)", "\xc2\xa7" "4.2.4");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    /* Use identify for a longer multi-character response */
+    sdi12_ident_t ident;
+    sdi12_err_t err = sdi12_master_identify(timing_master(ctx), addr, &ident);
+
+    if (err != SDI12_OK) {
+        TEST_ERROR_MSG(r, "Identify failed, cannot measure interchar gap");
+        return r;
+    }
+
+    r.measured_us   = timing_max_interchar_gap_us(ctx);
+    r.spec_limit_us = SDI12_INTERCHAR_MAX_MS * 1000;
+
+    if (r.measured_us > r.spec_limit_us) {
+        TEST_FAIL_MSG(r, "Max gap %.3f ms exceeds %.3f ms limit",
+                      r.measured_us / 1000.0, r.spec_limit_us / 1000.0);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Max gap: %.3f ms (limit: %.3f ms)",
+                  r.measured_us / 1000.0, r.spec_limit_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  7. Standard Measurement (aM!)
+ *  §4.4.6 — Response: "atttn\r\n" (ttt=0-999, n=0-9)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_measurement_m(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Standard Measurement (aM!)", "\xc2\xa7" "4.4.6");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_STANDARD, 0, false, &mresp);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "M command failed with error %d", err);
+        return r;
+    }
+    if (mresp.address != addr) {
+        TEST_FAIL_MSG(r, "Address echo mismatch: expected '%c', got '%c'",
+                      addr, mresp.address);
+        return r;
+    }
+    if (mresp.wait_seconds > 999) {
+        TEST_FAIL_MSG(r, "Wait time %d exceeds max 999", mresp.wait_seconds);
+        return r;
+    }
+    if (mresp.value_count > SDI12_M_MAX_VALUES) {
+        TEST_FAIL_MSG(r, "Value count %d exceeds max %d",
+                      mresp.value_count, SDI12_M_MAX_VALUES);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    TEST_PASS_MSG(r, "ttt=%d, n=%d (%.3f ms)",
+                  mresp.wait_seconds, mresp.value_count, r.measured_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  8. CRC Measurement (aMC!)
+ *  §4.4.12 — CRC-16-IBM, 3 ASCII chars appended to D response
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_measurement_crc(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("CRC Measurement (aMC!)", "\xc2\xa7" "4.4.12");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_STANDARD, 0, true, &mresp);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "MC command failed: error %d", err);
+        return r;
+    }
+
+    if (mresp.wait_seconds > 0) {
+        sdi12_master_wait_service_request(
+            timing_master(ctx), addr,
+            (uint32_t)mresp.wait_seconds * 1000 + 1000);
+    }
+
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "Sensor reports 0 values");
+        return r;
+    }
+
+    sdi12_data_response_t dresp;
+    err = sdi12_master_get_data(timing_master(ctx), addr, 0, true, &dresp);
+
+    if (err == SDI12_ERR_CRC_MISMATCH) {
+        TEST_FAIL_MSG(r, "CRC verification failed");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "D0! with CRC failed: error %d", err);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "CRC verified, %d values", dresp.value_count);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  9. Concurrent Measurement (aC!)
+ *  §4.4.8 — Response: "atttnn\r\n" (nn=0-99)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_measurement_c(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Concurrent Measurement (aC!)", "\xc2\xa7" "4.4.8");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_CONCURRENT, 0, false, &mresp);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "C command failed: error %d", err);
+        return r;
+    }
+    if (mresp.address != addr) {
+        TEST_FAIL_MSG(r, "Address echo: expected '%c', got '%c'", addr, mresp.address);
+        return r;
+    }
+    if (mresp.value_count > SDI12_C_MAX_VALUES) {
+        TEST_FAIL_MSG(r, "Value count %d exceeds max %d",
+                      mresp.value_count, SDI12_C_MAX_VALUES);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    TEST_PASS_MSG(r, "ttt=%d, nn=%d (%.3f ms)",
+                  mresp.wait_seconds, mresp.value_count, r.measured_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  10. Concurrent + CRC (aCC!)
+ *  §4.4.8 + §4.4.12
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_measurement_cc(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Concurrent + CRC (aCC!)", "\xc2\xa7" "4.4.8/12");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_CONCURRENT, 0, true, &mresp);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "CC command failed: error %d", err);
+        return r;
+    }
+
+    if (mresp.wait_seconds > 0)
+        ctx->hal->delay_ms(ctx->hal, (uint32_t)mresp.wait_seconds * 1000 + 500);
+
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "0 values for CC");
+        return r;
+    }
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_data_response_t dresp;
+    err = sdi12_master_get_data(timing_master(ctx), addr, 0, true, &dresp);
+
+    if (err == SDI12_ERR_CRC_MISMATCH) {
+        TEST_FAIL_MSG(r, "CRC verification failed on CC data");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "D0! with CRC failed: error %d", err);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "CRC verified, %d values", dresp.value_count);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  11. Service Request Timing
+ *  §4.4.6 — Must arrive within ttt seconds + margin
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_service_request(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Service Request Timing", "\xc2\xa7" "4.4.6");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_STANDARD, 0, false, &mresp);
+
+    if (err != SDI12_OK) {
+        TEST_ERROR_MSG(r, "M command failed: error %d", err);
+        return r;
+    }
+    if (mresp.wait_seconds == 0 && mresp.value_count > 0) {
+        TEST_SKIP_MSG(r, "ttt=0, sensor provides immediate data");
+        return r;
+    }
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "No values to measure");
+        return r;
+    }
+
+    uint64_t sr_start = ctx->hal->micros(ctx->hal);
+    uint32_t timeout  = (uint32_t)mresp.wait_seconds * 1000 + 1000;
+
+    err = sdi12_master_wait_service_request(timing_master(ctx), addr, timeout);
+
+    uint64_t sr_elapsed = ctx->hal->micros(ctx->hal) - sr_start;
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "No service request within %u ms", timeout);
+        return r;
+    }
+
+    r.measured_us   = sr_elapsed;
+    r.spec_limit_us = ((uint64_t)mresp.wait_seconds + 1) * 1000000ULL;
+
+    if (sr_elapsed > r.spec_limit_us) {
+        TEST_FAIL_MSG(r, "Late: %.3f ms (ttt=%ds)", sr_elapsed / 1000.0, mresp.wait_seconds);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Arrived in %.3f ms (ttt=%ds)", sr_elapsed / 1000.0, mresp.wait_seconds);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  12. Data Retrieval (aD0!)
+ *  §4.4.7 — Values with mandatory sign prefix
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_data_retrieval(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Data Retrieval (aD0!)", "\xc2\xa7" "4.4.7");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_STANDARD, 0, false, &mresp);
+
+    if (err != SDI12_OK) {
+        TEST_ERROR_MSG(r, "M command failed: error %d", err);
+        return r;
+    }
+
+    if (mresp.wait_seconds > 0) {
+        sdi12_master_wait_service_request(
+            timing_master(ctx), addr,
+            (uint32_t)mresp.wait_seconds * 1000 + 1000);
+    }
+
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "Sensor reports 0 values");
+        return r;
+    }
+
+    uint8_t total = 0;
+    for (uint8_t page = 0; total < mresp.value_count && page < 10; page++) {
+        sdi12_data_response_t dresp;
+        err = sdi12_master_get_data(timing_master(ctx), addr, page, false, &dresp);
+
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(r, "D%d! failed: error %d", page, err);
+            return r;
+        }
+        total += dresp.value_count;
+    }
+
+    if (total != mresp.value_count) {
+        TEST_FAIL_MSG(r, "Value count mismatch: M said %d, got %d",
+                      mresp.value_count, total);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    TEST_PASS_MSG(r, "%d values retrieved", total);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  13. Data Retention
+ *  §4.4.7 — Data persists until next M command or power loss
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_data_retention(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Data Retention", "\xc2\xa7" "4.4.7");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_STANDARD, 0, false, &mresp);
+
+    if (err != SDI12_OK || mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "No measurement data to test retention");
+        return r;
+    }
+
+    if (mresp.wait_seconds > 0) {
+        sdi12_master_wait_service_request(
+            timing_master(ctx), addr,
+            (uint32_t)mresp.wait_seconds * 1000 + 1000);
+    }
+
+    /* Read data first time */
+    sdi12_data_response_t d1;
+    err = sdi12_master_get_data(timing_master(ctx), addr, 0, false, &d1);
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "First D0! failed: error %d", err);
+        return r;
+    }
+
+    /* Read data second time — should still be available */
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_data_response_t d2;
+    err = sdi12_master_get_data(timing_master(ctx), addr, 0, false, &d2);
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Second D0! failed: error %d -- data not retained", err);
+        return r;
+    }
+    if (d1.value_count != d2.value_count) {
+        TEST_FAIL_MSG(r, "Value count changed: %d -> %d", d1.value_count, d2.value_count);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Data retained across %d values", d1.value_count);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  14. Continuous Measurement (aR0!)
+ *  §4.4.9 — Immediate data response, no wait
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_continuous(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Continuous Measurement (aR0!)", "\xc2\xa7" "4.4.9");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_data_response_t dresp;
+    sdi12_err_t err = sdi12_master_continuous(timing_master(ctx), addr, 0, false, &dresp);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not support R0");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "R0 command failed: error %d", err);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    TEST_PASS_MSG(r, "%d values in %.3f ms", dresp.value_count, r.measured_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  15. Continuous + CRC (aRC0!)
+ *  §4.4.9 + §4.4.12
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_continuous_crc(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Continuous + CRC (aRC0!)", "\xc2\xa7" "4.4.9/12");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_data_response_t dresp;
+    sdi12_err_t err = sdi12_master_continuous(timing_master(ctx), addr, 0, true, &dresp);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not support RC0");
+        return r;
+    }
+    if (err == SDI12_ERR_CRC_MISMATCH) {
+        TEST_FAIL_MSG(r, "CRC verification failed on RC0 response");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "RC0 command failed: error %d", err);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "CRC verified, %d values", dresp.value_count);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  16. Verification (aV!)
+ *  §4.4.10 — Same format as M response
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_verify(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Verification (aV!)", "\xc2\xa7" "4.4.10");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_verify(timing_master(ctx), addr, &mresp);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not support V command");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "V command failed: error %d", err);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "ttt=%d, n=%d", mresp.wait_seconds, mresp.value_count);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  17. Address Change (aAb!)
+ *  §4.4.4 — Change address and restore
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_address_change(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Address Change (aAb!)", "\xc2\xa7" "4.4.4");
+
+    char temp = (addr == '9') ? '8' : '9';
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    /* Change to temp */
+    sdi12_err_t err = sdi12_master_change_address(timing_master(ctx), addr, temp);
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Change %c->%c failed: error %d", addr, temp, err);
+        return r;
+    }
+
+    /* Verify at new address */
+    sdi12_master_send_break(timing_master(ctx));
+    bool present = false;
+    sdi12_master_acknowledge(timing_master(ctx), temp, &present);
+
+    if (!present) {
+        TEST_FAIL_MSG(r, "Sensor not responding at new address '%c'", temp);
+        /* Try to restore */
+        sdi12_master_send_break(timing_master(ctx));
+        sdi12_master_change_address(timing_master(ctx), temp, addr);
+        return r;
+    }
+
+    /* Restore original */
+    sdi12_master_send_break(timing_master(ctx));
+    err = sdi12_master_change_address(timing_master(ctx), temp, addr);
+
+    if (err != SDI12_OK) {
+        TEST_ERROR_MSG(r, "RESTORE FAILED %c->%c! Sensor may be at '%c'", temp, addr, temp);
+        return r;
+    }
+
+    /* Verify restoration */
+    sdi12_master_send_break(timing_master(ctx));
+    present = false;
+    sdi12_master_acknowledge(timing_master(ctx), addr, &present);
+
+    if (!present) {
+        TEST_ERROR_MSG(r, "Sensor not responding at restored address '%c'", addr);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Changed %c->%c->%c successfully", addr, temp, addr);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  18. Break Aborts Measurement
+ *  §4.2.1 — Break during measurement must reset sensor state
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_break_abort(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Break Aborts Measurement", "\xc2\xa7" "4.2.1");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_STANDARD, 0, false, &mresp);
+
+    if (err != SDI12_OK) {
+        TEST_ERROR_MSG(r, "M command failed: error %d", err);
+        return r;
+    }
+
+    /* Immediately send another break */
+    sdi12_master_send_break(timing_master(ctx));
+
+    /* Sensor should respond normally to a new command */
+    bool present = false;
+    sdi12_master_acknowledge(timing_master(ctx), addr, &present);
+
+    if (!present) {
+        TEST_FAIL_MSG(r, "Sensor did not respond after break-abort");
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Sensor recovered after break during measurement");
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  19. Extended Command (aX!)
+ *  §4.4.11
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_extended(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Extended Command (aX!)", "\xc2\xa7" "4.4.11");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    char   resp[82];
+    size_t resp_len = sizeof(resp);
+    sdi12_err_t err = sdi12_master_extended(
+        timing_master(ctx), addr, "", resp, &resp_len, 1000);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "No response to aX! (may not support extended commands)");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Extended command error: %d", err);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Response received (%zu bytes)", resp_len);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  20. Measurement Groups (aM1! through aM9!)
+ *  §4.4.6
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_measurement_groups(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Measurement Groups (aM1-M9)", "\xc2\xa7" "4.4.6");
+
+    int  supported = 0;
+    char groups[16];
+    memset(groups, 0, sizeof(groups));
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    for (uint8_t g = 1; g <= 9; g++) {
+        sdi12_meas_response_t mresp;
+        sdi12_err_t err = sdi12_master_start_measurement(
+            timing_master(ctx), addr, SDI12_MEAS_STANDARD, g, false, &mresp);
+
+        if (err == SDI12_OK && mresp.value_count > 0)
+            groups[supported++] = '0' + g;
+
+        sdi12_master_send_break(timing_master(ctx));
+    }
+
+    if (supported == 0) {
+        TEST_SKIP_MSG(r, "No additional measurement groups");
+        return r;
+    }
+
+    groups[supported] = '\0';
+    TEST_PASS_MSG(r, "%d group(s): M%s", supported, groups);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  21. Full Bus Scan (all 62 addresses)
+ *  §4.4.1
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_bus_scan(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Full Bus Scan (62 addresses)", "\xc2\xa7" "4.4.1");
+    (void)addr;
+
+    static const char addrs[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    int  found = 0;
+    char found_addrs[64];
+    memset(found_addrs, 0, sizeof(found_addrs));
+
+    for (size_t i = 0; i < sizeof(addrs) - 1; i++) {
+        bool present = false;
+        sdi12_master_acknowledge(timing_master(ctx), addrs[i], &present);
+        if (present)
+            found_addrs[found++] = addrs[i];
+    }
+
+    if (found == 0) {
+        TEST_FAIL_MSG(r, "No sensors found on bus");
+        return r;
+    }
+
+    found_addrs[found] = '\0';
+    TEST_PASS_MSG(r, "Found %d sensor(s): %s", found, found_addrs);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  Registration
+ * ══════════════════════════════════════════════════════════════════════ */
+
+void sensor_tests_register(test_suite_t *suite) {
+    test_suite_add(suite, "acknowledge",    "Acknowledge (a!)",                "\xc2\xa7" "4.4.2",    test_acknowledge);
+    test_suite_add(suite, "query_address",  "Query Address (?!)",              "\xc2\xa7" "4.4.1",    test_query_address);
+    test_suite_add(suite, "identify",       "Identify (aI!)",                  "\xc2\xa7" "4.4.3",    test_identify);
+    test_suite_add(suite, "wrong_addr",     "Wrong Address Silence",           "\xc2\xa7" "4.3",      test_wrong_address_silence);
+    test_suite_add(suite, "response_time",  "Response Timing (<=15ms)",        "\xc2\xa7" "4.2.3",    test_response_timing);
+    test_suite_add(suite, "interchar_gap",  "Inter-Character Gap (<=1.66ms)",  "\xc2\xa7" "4.2.4",    test_interchar_gap);
+    test_suite_add(suite, "meas_m",         "Standard Measurement (aM!)",      "\xc2\xa7" "4.4.6",    test_measurement_m);
+    test_suite_add(suite, "meas_mc",        "CRC Measurement (aMC!)",          "\xc2\xa7" "4.4.12",   test_measurement_crc);
+    test_suite_add(suite, "meas_c",         "Concurrent Measurement (aC!)",    "\xc2\xa7" "4.4.8",    test_measurement_c);
+    test_suite_add(suite, "meas_cc",        "Concurrent + CRC (aCC!)",         "\xc2\xa7" "4.4.8/12", test_measurement_cc);
+    test_suite_add(suite, "service_req",    "Service Request Timing",          "\xc2\xa7" "4.4.6",    test_service_request);
+    test_suite_add(suite, "data_d0",        "Data Retrieval (aD0!)",           "\xc2\xa7" "4.4.7",    test_data_retrieval);
+    test_suite_add(suite, "data_retain",    "Data Retention",                  "\xc2\xa7" "4.4.7",    test_data_retention);
+    test_suite_add(suite, "continuous",     "Continuous Measurement (aR0!)",   "\xc2\xa7" "4.4.9",    test_continuous);
+    test_suite_add(suite, "continuous_crc", "Continuous + CRC (aRC0!)",        "\xc2\xa7" "4.4.9/12", test_continuous_crc);
+    test_suite_add(suite, "verify",         "Verification (aV!)",              "\xc2\xa7" "4.4.10",   test_verify);
+    test_suite_add(suite, "addr_change",    "Address Change (aAb!)",           "\xc2\xa7" "4.4.4",    test_address_change);
+    test_suite_add(suite, "break_abort",    "Break Aborts Measurement",        "\xc2\xa7" "4.2.1",    test_break_abort);
+    test_suite_add(suite, "extended",       "Extended Command (aX!)",          "\xc2\xa7" "4.4.11",   test_extended);
+    test_suite_add(suite, "meas_groups",    "Measurement Groups (aM1-M9)",     "\xc2\xa7" "4.4.6",    test_measurement_groups);
+    test_suite_add(suite, "bus_scan",       "Full Bus Scan (62 addresses)",    "\xc2\xa7" "4.4.1",    test_bus_scan);
+}
