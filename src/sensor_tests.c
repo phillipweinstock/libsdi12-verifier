@@ -1075,44 +1075,60 @@ static test_result_t test_hv_ascii_crc(timing_ctx_t *ctx, char addr) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- *  25. High-Volume Binary (aHB!)
- *  §4.4.14 — Full HV binary: M → SR → D-page decode
+ *  25 / 31. High-Volume Binary (aHB! / aHBC!)
+ *  §5.2 — Binary packet framing: aDBn! retrieves
+ *         addr(1) + pkt_size(2 LE) + type(1) + payload(N) + CRC(2 LE)
  * ══════════════════════════════════════════════════════════════════════ */
 
-static test_result_t test_hv_binary(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("High-Volume Binary (aHB!)", "\xc2\xa7" "4.4.14");
-
+/**
+ * Helper: run a full HV binary measurement cycle.
+ *
+ * Sends aHB!/aHBC! → waits for service request → fetches binary data
+ * pages via aDBn! per §5.2.  Each binary packet is verified for:
+ *   - 16-bit CRC (always present in binary packets)
+ *   - Valid binary type code
+ *   - Payload alignment to element size
+ *
+ * @param ctx   Timing context.
+ * @param addr  Sensor address.
+ * @param crc   If true, sends aHBC! instead of aHB!.
+ * @param r     Test result to populate.
+ * @return true if the test completed (pass or fail), false to skip.
+ */
+static bool hv_binary_cycle(timing_ctx_t *ctx, char addr, bool crc,
+                            test_result_t *r)
+{
     sdi12_master_send_break(timing_master(ctx));
 
     sdi12_meas_response_t mresp;
     sdi12_err_t err = sdi12_master_start_measurement(
-        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_BINARY, 0, false, &mresp);
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_BINARY, 0, crc, &mresp);
 
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not support aHB!");
-        return r;
+        TEST_SKIP_MSG(*r, "Sensor does not support aHB%s!", crc ? "C" : "");
+        return false;
     }
     if (err != SDI12_OK) {
-        TEST_FAIL_MSG(r, "HB command failed: error %d", err);
-        return r;
+        TEST_FAIL_MSG(*r, "HB%s command failed: error %d", crc ? "C" : "", err);
+        return true;
     }
     if (mresp.address != addr) {
-        TEST_FAIL_MSG(r, "Address echo mismatch: expected '%c', got '%c'",
+        TEST_FAIL_MSG(*r, "Address echo mismatch: expected '%c', got '%c'",
                       addr, mresp.address);
-        return r;
+        return true;
     }
     if (mresp.value_count > SDI12_H_MAX_VALUES) {
-        TEST_FAIL_MSG(r, "Value count %d exceeds max %d",
+        TEST_FAIL_MSG(*r, "Value count %d exceeds max %d",
                       mresp.value_count, SDI12_H_MAX_VALUES);
-        return r;
+        return true;
     }
     if (mresp.value_count == 0) {
-        TEST_SKIP_MSG(r, "Sensor reports 0 values for HB");
-        return r;
+        TEST_SKIP_MSG(*r, "Sensor reports 0 values for HB%s", crc ? "C" : "");
+        return false;
     }
 
-    r.measured_us   = timing_response_latency_us(ctx);
-    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+    r->measured_us   = timing_response_latency_us(ctx);
+    r->spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
 
     /* Wait for service request if ttt > 0 */
     if (mresp.wait_seconds > 0) {
@@ -1120,55 +1136,73 @@ static test_result_t test_hv_binary(timing_ctx_t *ctx, char addr) {
         err = sdi12_master_wait_service_request(
             timing_master(ctx), addr, sr_timeout);
         if (err != SDI12_OK) {
-            TEST_FAIL_MSG(r, "No service request within %u ms", sr_timeout);
-            return r;
+            TEST_FAIL_MSG(*r, "No service request within %u ms", sr_timeout);
+            return true;
         }
     }
 
-    /* Fetch D pages and attempt binary decode.
-     * Binary page format: 1-byte type prefix + raw binary values.
-     * We validate the type byte and check that the payload is a
-     * valid multiple of the element size. */
+    /* Enable binary recv mode — aDBn! packets may contain 0x0A bytes */
+    timing_set_binary_recv(ctx, true);
+
+    /* Fetch binary data pages via aDBn! (§5.2 binary packet framing).
+     * Each packet: addr(1) + pkt_size(2 LE) + type(1) + payload(N) + CRC(2 LE).
+     * CRC is always present and verified by the master API. */
     uint16_t total = 0;
     for (uint16_t page = 0; total < mresp.value_count && page < SDI12_MAX_HV_DATA_PAGES; page++) {
-        char raw[SDI12_RESP_MAX_CHARS + 4];
-        size_t raw_len = sizeof(raw);
-        err = sdi12_master_get_hv_data(timing_master(ctx), addr, page,
-                                       raw, &raw_len);
+        sdi12_bintype_t btype;
+        uint8_t payload[SDI12_BIN_MAX_PAYLOAD];
+        size_t payload_len = sizeof(payload);
 
-        if (err != SDI12_OK) {
-            TEST_FAIL_MSG(r, "D%u! failed: error %d", page, err);
-            return r;
+        err = sdi12_master_get_hv_binary_data(
+            timing_master(ctx), addr, page, &btype, payload, &payload_len);
+
+        if (err == SDI12_ERR_CRC_MISMATCH) {
+            timing_set_binary_recv(ctx, false);
+            TEST_FAIL_MSG(*r, "CRC mismatch on DB%u! binary packet", page);
+            return true;
         }
-        if (raw_len == 0) break; /* empty page — done */
+        if (err != SDI12_OK) {
+            timing_set_binary_recv(ctx, false);
+            TEST_FAIL_MSG(*r, "DB%u! failed: error %d", page, err);
+            return true;
+        }
+        if (payload_len == 0) break;  /* empty packet — no more data */
 
-        /* First byte is binary type code */
-        sdi12_bintype_t btype = (sdi12_bintype_t)(unsigned char)raw[0];
         size_t elem_sz = sdi12_bintype_size(btype);
         if (elem_sz == 0) {
-            TEST_FAIL_MSG(r, "D%u! invalid binary type code 0x%02X",
-                          page, (unsigned char)raw[0]);
-            return r;
+            timing_set_binary_recv(ctx, false);
+            TEST_FAIL_MSG(*r, "DB%u! invalid binary type code 0x%02X",
+                          page, (unsigned)btype);
+            return true;
         }
 
-        size_t payload_len = raw_len - 1;
         if (payload_len % elem_sz != 0) {
-            TEST_FAIL_MSG(r, "D%u! payload %zu bytes not a multiple of %zu "
+            timing_set_binary_recv(ctx, false);
+            TEST_FAIL_MSG(*r, "DB%u! payload %zu bytes not a multiple of %zu "
                           "(type %d)", page, payload_len, elem_sz, btype);
-            return r;
+            return true;
         }
 
         total += (uint16_t)(payload_len / elem_sz);
     }
 
+    timing_set_binary_recv(ctx, false);
+
     if (total != mresp.value_count) {
-        TEST_FAIL_MSG(r, "Value count mismatch: HB said %d, binary pages gave %d",
-                      mresp.value_count, total);
-        return r;
+        TEST_FAIL_MSG(*r, "Value count mismatch: HB%s said %d, binary pages gave %d",
+                      crc ? "C" : "", mresp.value_count, total);
+        return true;
     }
 
-    TEST_PASS_MSG(r, "ttt=%d, nnn=%d, %d binary values decoded",
-                  mresp.wait_seconds, mresp.value_count, total);
+    TEST_PASS_MSG(*r, "ttt=%d, nnn=%d, %d binary values (aDBn! CRC OK)%s",
+                  mresp.wait_seconds, mresp.value_count, total,
+                  crc ? " [HBC]" : "");
+    return true;
+}
+
+static test_result_t test_hv_binary(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("High-Volume Binary (aHB!)", "\xc2\xa7" "5.2");
+    hv_binary_cycle(ctx, addr, false, &r);
     return r;
 }
 
@@ -1421,96 +1455,12 @@ static test_result_t test_continuous_groups(timing_ctx_t *ctx, char addr) {
 
 /* ══════════════════════════════════════════════════════════════════════
  *  31. High-Volume Binary + CRC (aHBC!)
- *  §4.4.14 + §4.4.12 — HV binary with CRC on D responses
+ *  §5.2 — Binary data via aDBn! (CRC is always present in binary packets)
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_hv_binary_crc(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("High-Volume Binary + CRC (aHBC!)", "\xc2\xa7" "4.4.14/12");
-
-    sdi12_master_send_break(timing_master(ctx));
-
-    sdi12_meas_response_t mresp;
-    sdi12_err_t err = sdi12_master_start_measurement(
-        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_BINARY, 0, true, &mresp);
-
-    if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not support aHBC!");
-        return r;
-    }
-    if (err != SDI12_OK) {
-        TEST_FAIL_MSG(r, "HBC command failed: error %d", err);
-        return r;
-    }
-    if (mresp.value_count == 0) {
-        TEST_SKIP_MSG(r, "Sensor reports 0 values for HBC");
-        return r;
-    }
-
-    r.measured_us   = timing_response_latency_us(ctx);
-    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
-
-    if (mresp.wait_seconds > 0) {
-        uint32_t sr_timeout = (uint32_t)mresp.wait_seconds * 1000 + 1000;
-        err = sdi12_master_wait_service_request(
-            timing_master(ctx), addr, sr_timeout);
-        if (err != SDI12_OK) {
-            TEST_FAIL_MSG(r, "No service request within %u ms", sr_timeout);
-            return r;
-        }
-    }
-
-    /* Fetch D pages — verify CRC on raw response, then decode binary */
-    uint16_t total = 0;
-    for (uint16_t page = 0; total < mresp.value_count && page < SDI12_MAX_HV_DATA_PAGES; page++) {
-        char raw[SDI12_RESP_MAX_CHARS + 4];
-        size_t raw_len = sizeof(raw);
-        err = sdi12_master_get_hv_data(timing_master(ctx), addr, page,
-                                       raw, &raw_len);
-
-        if (err != SDI12_OK) {
-            TEST_FAIL_MSG(r, "D%u! failed: error %d", page, err);
-            return r;
-        }
-        if (raw_len == 0) break;
-
-        /*
-         * CRC check: get_hv_data() already called trim_crlf() on
-         * resp_buf, so the meaningful data there is exactly
-         * address (1 byte) + raw_data (raw_len bytes, incl. 3 CRC chars).
-         */
-        if (!sdi12_crc_verify(timing_master(ctx)->resp_buf, raw_len + 1)) {
-            TEST_FAIL_MSG(r, "CRC mismatch on D%u! page", page);
-            return r;
-        }
-
-        /* Strip 3 CRC chars from the data portion for binary decode */
-        if (raw_len >= 3) raw_len -= 3;
-
-        sdi12_bintype_t btype = (sdi12_bintype_t)(unsigned char)raw[0];
-        size_t elem_sz = sdi12_bintype_size(btype);
-        if (elem_sz == 0) {
-            TEST_FAIL_MSG(r, "D%u! invalid binary type 0x%02X",
-                          page, (unsigned char)raw[0]);
-            return r;
-        }
-
-        size_t payload_len = raw_len - 1;
-        if (payload_len % elem_sz != 0) {
-            TEST_FAIL_MSG(r, "D%u! payload %zu not multiple of %zu",
-                          page, payload_len, elem_sz);
-            return r;
-        }
-
-        total += (uint16_t)(payload_len / elem_sz);
-    }
-
-    if (total != mresp.value_count) {
-        TEST_FAIL_MSG(r, "Count mismatch: HBC said %d, pages gave %d",
-                      mresp.value_count, total);
-        return r;
-    }
-
-    TEST_PASS_MSG(r, "nnn=%d, %d binary values (CRC OK)", mresp.value_count, total);
+    test_result_t r = TEST_RESULT("High-Volume Binary + CRC (aHBC!)", "\xc2\xa7" "5.2");
+    hv_binary_cycle(ctx, addr, true, &r);
     return r;
 }
 
@@ -1547,7 +1497,7 @@ void sensor_tests_register(test_suite_t *suite) {
     test_suite_add(suite, "resp_compliance","Response Compliance",             "\xc2\xa7" "4.3/4.4",  test_response_compliance);
     test_suite_add(suite, "hv_ascii",       "High-Volume ASCII (aHA!)",        "\xc2\xa7" "4.4.13",   test_hv_ascii);
     test_suite_add(suite, "hv_ascii_crc",   "High-Volume ASCII+CRC (aHAC!)",   "\xc2\xa7" "4.4.13/12",test_hv_ascii_crc);
-    test_suite_add(suite, "hv_binary",      "High-Volume Binary (aHB!)",       "\xc2\xa7" "4.4.14",   test_hv_binary);
-    test_suite_add(suite, "hv_binary_crc",  "High-Volume Binary+CRC (aHBC!)",  "\xc2\xa7" "4.4.14/12",test_hv_binary_crc);
+    test_suite_add(suite, "hv_binary",      "High-Volume Binary (aHB!)",       "\xc2\xa7" "5.2",      test_hv_binary);
+    test_suite_add(suite, "hv_binary_crc",  "High-Volume Binary+CRC (aHBC!)",  "\xc2\xa7" "5.2",      test_hv_binary_crc);
     test_suite_add(suite, "identify_meas",  "Identify Measurement (aIM!)",     "\xc2\xa7" "4.4.15",   test_identify_measurement);
 }

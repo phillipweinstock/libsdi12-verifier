@@ -51,6 +51,7 @@ typedef struct {
 
     /* Configuration */
     bool                use_rts;
+    bool                binary_recv_mode; /**< When set, recv doesn't stop at newline. */
 } timing_ctx_t;
 
 /**
@@ -63,6 +64,17 @@ typedef struct {
  * @return 0 on success, -1 on failure.
  */
 int timing_init(timing_ctx_t *ctx, hal_t *hal, bool use_rts);
+
+/**
+ * Enable or disable binary receive mode.
+ *
+ * When enabled, the recv callback reads exactly `max` bytes without
+ * stopping at newline characters.  Required for §5.2 binary packet
+ * reads where payload bytes may include 0x0A.
+ */
+static inline void timing_set_binary_recv(timing_ctx_t *ctx, bool enable) {
+    ctx->binary_recv_mode = enable;
+}
 
 /** Microseconds between command TX completion and first response byte. */
 uint64_t timing_response_latency_us(const timing_ctx_t *ctx);

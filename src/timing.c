@@ -55,7 +55,7 @@ static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_dat
             buf[pos++]     = c;
             t->resp_end_us = now;
 
-            if (c == '\n') {
+            if (!t->binary_recv_mode && c == '\n') {
                 /* Record line boundary timestamp */
                 if (t->line_count < TIMING_MAX_LINES)
                     t->line_end_us[t->line_count++] = now;
