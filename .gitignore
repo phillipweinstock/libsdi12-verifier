@@ -12,3 +12,5 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 MONITOR_DECODE_PLAN.md
+build.ninja
+*.pdf
