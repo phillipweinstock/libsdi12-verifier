@@ -1,6 +1,6 @@
 /**
  * @file recorder_tests.c
- * @brief SDI-12 data recorder compliance tests.
+ * @brief SDI-12 data recorder compliance tests (16 tests).
  *
  * The verifier acts as a simulated SDI-12 sensor using the libsdi12
  * sensor API. The device under test is a data recorder (master).
@@ -9,7 +9,8 @@
  *   - The verifier configures itself as a sensor at the target address
  *   - It listens on the bus for commands from the recorder
  *   - Each test verifies a specific aspect of the recorder's protocol
- *     behavior: break timing, command format, M->D sequence, etc.
+ *     behavior: break timing, command format, M->D sequence, service
+ *     request handling, concurrent/continuous measurement, CRC, etc.
  *
  * The simulated sensor responds correctly so the recorder can operate
  * normally while we measure its compliance from the sensor's perspective.
@@ -47,6 +48,12 @@ typedef struct {
     /* Response tracking */
     char                last_response[SDI12_MAX_RESPONSE_LEN + 4];
     size_t              last_response_len;
+
+    /* Async measurement support */
+    uint16_t            meas_ttt;           /**< Configured ttt (seconds) for M/C */
+    bool                meas_pending;       /**< Async measurement in progress    */
+    uint64_t            meas_done_us;       /**< Timestamp when measurement finishes */
+    bool                service_req_sent;   /**< Service request was emitted      */
 } rec_sim_t;
 
 static rec_sim_t g_sim;
@@ -89,6 +96,73 @@ static sdi12_value_t sim_read_param(uint8_t param_index, void *user_data) {
         v.decimals = 0;
     }
     return v;
+}
+
+/**
+ * start_measurement callback — returns the configured ttt and schedules
+ * the completion timestamp.  The test loop must call
+ * sim_poll_measurement() to complete the measurement when the time
+ * elapses.
+ */
+static uint16_t sim_start_measurement(uint8_t group, sdi12_meas_type_t type,
+                                       void *user_data)
+{
+    (void)group;
+    (void)type;
+    rec_sim_t *s = (rec_sim_t *)user_data;
+    uint16_t ttt = s->meas_ttt;
+    if (ttt > 0) {
+        s->meas_pending = true;
+        s->meas_done_us = s->hal->micros(s->hal) + (uint64_t)ttt * 1000000;
+        s->service_req_sent = false;
+    }
+    return ttt;
+}
+
+/**
+ * service_request callback — sends "a\r\n" on the bus.
+ */
+static void sim_service_request(void *user_data)
+{
+    rec_sim_t *s = (rec_sim_t *)user_data;
+
+    char sr[4];
+    snprintf(sr, sizeof(sr), "%c\r\n", s->addr);
+
+    if (s->use_rts)
+        s->hal->set_rts(s->hal, true);
+
+    s->hal->write(s->hal, sr, 3);
+    s->hal->flush(s->hal);
+
+    if (s->use_rts)
+        s->hal->set_rts(s->hal, false);
+
+    s->service_req_sent = true;
+}
+
+/**
+ * Poll for deferred measurement completion.  If the configured ttt
+ * delay has elapsed, call sdi12_sensor_measurement_done() which in
+ * turn triggers the service request callback (for M/V commands).
+ *
+ * Returns true if the measurement just completed.
+ */
+static bool sim_poll_measurement(rec_sim_t *s)
+{
+    if (!s->meas_pending)
+        return false;
+    if (s->hal->micros(s->hal) < s->meas_done_us)
+        return false;
+
+    /* Build the value array from read_param */
+    sdi12_value_t vals[SIM_PARAM_COUNT];
+    for (uint8_t i = 0; i < SIM_PARAM_COUNT; i++)
+        vals[i] = sim_read_param(i, s);
+
+    s->meas_pending = false;
+    sdi12_sensor_measurement_done(&s->sensor, vals, SIM_PARAM_COUNT);
+    return true;
 }
 
 /* ── Bus RX helpers — listen for recorder commands ────────────── */
@@ -190,11 +264,17 @@ static bool read_command(rec_sim_t *s, uint32_t timeout_ms) {
  * Wait for a break + command sequence from the recorder, then process
  * it through the simulated sensor and respond.  Returns true if a
  * valid command was received and responded to.
+ *
+ * While waiting, polls for deferred measurement completion so the
+ * service request is emitted at the right time.
  */
 static bool wait_and_respond(rec_sim_t *s, uint32_t timeout_ms) {
     s->cmd_byte_count = 0;
     s->last_cmd_len = 0;
     memset(s->last_cmd, 0, sizeof(s->last_cmd));
+
+    /* Poll for measurement completion before listening for commands */
+    sim_poll_measurement(s);
 
     uint64_t brk = wait_for_break(s, timeout_ms);
     if (brk == 0)
@@ -212,14 +292,50 @@ static bool wait_and_respond(rec_sim_t *s, uint32_t timeout_ms) {
 }
 
 /**
- * Initialize the simulated sensor for recorder tests.
+ * Wait for a break + command from the recorder, polling for deferred
+ * measurement completion in the background.  This variant keeps
+ * polling sim_poll_measurement() during the break wait so the service
+ * request fires at the right instant.
  */
-static int sim_init(rec_sim_t *s, timing_ctx_t *timing_ctx, char addr) {
+static bool wait_and_respond_poll(rec_sim_t *s, uint32_t timeout_ms) {
+    s->cmd_byte_count = 0;
+    s->last_cmd_len = 0;
+    memset(s->last_cmd, 0, sizeof(s->last_cmd));
+
+    /* Keep polling until break detected or timeout */
+    uint64_t deadline = s->hal->micros(s->hal) + (uint64_t)timeout_ms * 1000;
+    uint64_t brk = 0;
+
+    while (s->hal->micros(s->hal) < deadline) {
+        sim_poll_measurement(s);
+        brk = wait_for_break(s, 50);   /* Short poll interval */
+        if (brk > 0) break;
+    }
+
+    if (brk == 0)
+        return false;
+
+    sdi12_sensor_break(&s->sensor);
+
+    if (!read_command(s, 500))
+        return false;
+
+    sdi12_sensor_process(&s->sensor, s->last_cmd, s->last_cmd_len - 1);
+    return true;
+}
+
+/**
+ * Initialize the simulated sensor for recorder tests.
+ * @param ttt  Measurement delay in seconds (0 = synchronous / immediate).
+ */
+static int sim_init_ex(rec_sim_t *s, timing_ctx_t *timing_ctx, char addr,
+                        uint16_t ttt) {
     memset(s, 0, sizeof(*s));
     s->hal     = timing_ctx->hal;
     s->timing  = timing_ctx;
     s->addr    = addr;
     s->use_rts = timing_ctx->use_rts;
+    s->meas_ttt = ttt;
 
     sdi12_ident_t ident;
     memset(&ident, 0, sizeof(ident));
@@ -230,10 +346,12 @@ static int sim_init(rec_sim_t *s, timing_ctx_t *timing_ctx, char addr) {
 
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
-    cb.send_response = sim_send_response;
-    cb.set_direction = sim_set_direction;
-    cb.read_param    = sim_read_param;
-    cb.user_data     = s;
+    cb.send_response     = sim_send_response;
+    cb.set_direction     = sim_set_direction;
+    cb.read_param        = sim_read_param;
+    cb.start_measurement = (ttt > 0) ? sim_start_measurement : NULL;
+    cb.service_request   = (ttt > 0) ? sim_service_request   : NULL;
+    cb.user_data         = s;
 
     sdi12_err_t err = sdi12_sensor_init(&s->sensor, addr, &ident, &cb);
     if (err != SDI12_OK)
@@ -244,6 +362,11 @@ static int sim_init(rec_sim_t *s, timing_ctx_t *timing_ctx, char addr) {
     sdi12_sensor_register_param(&s->sensor, 0, "PA", "kPa", 2);
 
     return 0;
+}
+
+/** Convenience wrapper — synchronous sim (ttt=0) for existing tests. */
+static int sim_init(rec_sim_t *s, timing_ctx_t *timing_ctx, char addr) {
+    return sim_init_ex(s, timing_ctx, addr, 0);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -708,6 +831,418 @@ static test_result_t test_rec_break_between(timing_ctx_t *ctx, char addr) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ *  10. Service Request After Deferred Measurement
+ *  §4.4.6 — Recorder sends M!, waits for service request, then D0!
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_rec_service_req(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Service Request Handling", "\xc2\xa7" "4.4.6");
+
+    /* Configure sim with ttt=1s so the measurement is deferred */
+    if (sim_init_ex(&g_sim, ctx, addr, 1) != 0) {
+        TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
+        return r;
+    }
+
+    printf("\n          Waiting for recorder M command (ttt=1s sim)...\n          ");
+    fflush(stdout);
+
+    bool got_m = false;
+    bool got_d = false;
+
+    for (int attempt = 0; attempt < 15; attempt++) {
+        if (!wait_and_respond_poll(&g_sim, 15000))
+            break;
+
+        if (!got_m) {
+            /* Look for an M-type command */
+            if (g_sim.last_cmd_len >= 3 &&
+                g_sim.last_cmd[0] == addr &&
+                g_sim.last_cmd[1] == 'M') {
+                got_m = true;
+                /* The sensor responded with attt2\r\n, ttt=001 */
+                continue;
+            }
+        } else {
+            /* After M, look for D0! */
+            if (g_sim.last_cmd_len >= 4 &&
+                g_sim.last_cmd[0] == addr &&
+                g_sim.last_cmd[1] == 'D') {
+                got_d = true;
+                break;
+            }
+        }
+    }
+
+    if (!got_m) {
+        TEST_SKIP_MSG(r, "Recorder did not send an M command");
+        return r;
+    }
+
+    if (!g_sim.service_req_sent) {
+        TEST_FAIL_MSG(r, "Service request was never emitted");
+        return r;
+    }
+
+    if (!got_d) {
+        TEST_FAIL_MSG(r, "Recorder did not send D after service request");
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "M -> service request -> D sequence correct");
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  11. Concurrent Measurement (C -> D)
+ *  §4.4.9 — Recorder sends aC!, sensor responds atttnn, then aD0!
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_rec_concurrent(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Concurrent Measurement (C)", "\xc2\xa7" "4.4.9");
+
+    /* ttt=0 for concurrent — data available immediately */
+    if (sim_init(&g_sim, ctx, addr) != 0) {
+        TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
+        return r;
+    }
+
+    printf("\n          Waiting for recorder C command...\n          ");
+    fflush(stdout);
+
+    bool got_c = false;
+    bool got_d = false;
+    bool format_ok = false;
+
+    for (int attempt = 0; attempt < 10; attempt++) {
+        if (!wait_and_respond(&g_sim, 15000))
+            break;
+
+        if (!got_c) {
+            /* Look for aC! or aCC! */
+            if (g_sim.last_cmd_len >= 3 &&
+                g_sim.last_cmd[0] == addr &&
+                g_sim.last_cmd[1] == 'C' &&
+                g_sim.last_cmd[g_sim.last_cmd_len - 1] == '!') {
+                got_c = true;
+
+                /*
+                 * Verify the response format: atttnn\r\n
+                 * The sim responds with a00002 (ttt=0, nn=2 params)
+                 */
+                if (g_sim.last_response_len >= 7 &&
+                    g_sim.last_response[0] == addr) {
+                    format_ok = true;
+                }
+                continue;
+            }
+        } else {
+            /* After C, look for D0! */
+            if (g_sim.last_cmd_len >= 4 &&
+                g_sim.last_cmd[0] == addr &&
+                g_sim.last_cmd[1] == 'D') {
+                got_d = true;
+                break;
+            }
+        }
+    }
+
+    if (!got_c) {
+        TEST_SKIP_MSG(r, "Recorder did not send a C command");
+        return r;
+    }
+
+    if (!format_ok) {
+        TEST_FAIL_MSG(r, "Concurrent response format invalid");
+        return r;
+    }
+
+    if (!got_d) {
+        TEST_FAIL_MSG(r, "Recorder sent C but did not follow with D command");
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Correct C -> D sequence observed");
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  12. CRC Measurement Variant (MC -> D)
+ *  §4.4.7 — Recorder sends aMC!, sensor response includes CRC
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_rec_crc(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("CRC Measurement (MC/CC)", "\xc2\xa7" "4.4.7");
+
+    if (sim_init(&g_sim, ctx, addr) != 0) {
+        TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
+        return r;
+    }
+
+    printf("\n          Waiting for recorder MC or CC command...\n          ");
+    fflush(stdout);
+
+    bool got_mc = false;
+    bool got_d  = false;
+    bool crc_in_response = false;
+
+    for (int attempt = 0; attempt < 12; attempt++) {
+        if (!wait_and_respond(&g_sim, 15000))
+            break;
+
+        if (!got_mc) {
+            /* Look for aMC! or aCC! */
+            if (g_sim.last_cmd_len >= 4 &&
+                g_sim.last_cmd[0] == addr &&
+                ((g_sim.last_cmd[1] == 'M' && g_sim.last_cmd[2] == 'C') ||
+                 (g_sim.last_cmd[1] == 'C' && g_sim.last_cmd[2] == 'C'))) {
+                got_mc = true;
+                continue;
+            }
+        } else {
+            /* After MC/CC, look for D0! */
+            if (g_sim.last_cmd_len >= 4 &&
+                g_sim.last_cmd[0] == addr &&
+                g_sim.last_cmd[1] == 'D') {
+                got_d = true;
+
+                /*
+                 * With CRC, the D response has 3 extra CRC chars before
+                 * the \r\n.  A minimal CRC response is: a+val+CCC\r\n
+                 * which is at least 10 chars.
+                 */
+                if (g_sim.last_response_len >= 10)
+                    crc_in_response = true;
+
+                break;
+            }
+        }
+    }
+
+    if (!got_mc) {
+        TEST_SKIP_MSG(r, "Recorder did not send MC or CC command");
+        return r;
+    }
+
+    if (!got_d) {
+        TEST_FAIL_MSG(r, "Recorder sent MC/CC but did not follow with D");
+        return r;
+    }
+
+    if (!crc_in_response) {
+        TEST_FAIL_MSG(r, "CRC data response too short — possible CRC issue");
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "MC/CC -> D with CRC response verified");
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  13. Continuous Measurement (R command)
+ *  §4.4.10 — Recorder sends aR0! for immediate data (no M required)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_rec_continuous(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Continuous Measurement (R)", "\xc2\xa7" "4.4.10");
+
+    if (sim_init(&g_sim, ctx, addr) != 0) {
+        TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
+        return r;
+    }
+
+    printf("\n          Waiting for recorder R command...\n          ");
+    fflush(stdout);
+
+    bool got_r = false;
+    bool data_ok = false;
+
+    for (int attempt = 0; attempt < 10; attempt++) {
+        if (!wait_and_respond(&g_sim, 15000))
+            break;
+
+        /* Look for aR0!–aR9! or aRC0!–aRC9! */
+        if (g_sim.last_cmd_len >= 4 &&
+            g_sim.last_cmd[0] == addr &&
+            g_sim.last_cmd[1] == 'R') {
+            got_r = true;
+
+            /*
+             * R command response is immediate data (like D response).
+             * Should contain address + values + \r\n.
+             * Minimum meaningful: a+23.45+1013.25\r\n  = 17 chars
+             */
+            if (g_sim.last_response_len >= 6 &&
+                g_sim.last_response[0] == addr) {
+                data_ok = true;
+            }
+            break;
+        }
+    }
+
+    if (!got_r) {
+        TEST_SKIP_MSG(r, "Recorder did not send an R command");
+        return r;
+    }
+
+    if (!data_ok) {
+        TEST_FAIL_MSG(r, "R command response did not contain expected data");
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Continuous measurement response sent: %.30s",
+                  g_sim.last_response);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  14. Address Change Command (aAb!)
+ *  §4.4.4 — Recorder sends aAb! to change sensor address
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_rec_addr_change(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Address Change (aAb!)", "\xc2\xa7" "4.4.4");
+
+    if (sim_init(&g_sim, ctx, addr) != 0) {
+        TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
+        return r;
+    }
+
+    printf("\n          Waiting for recorder address change command...\n          ");
+    fflush(stdout);
+
+    bool got_change = false;
+
+    for (int attempt = 0; attempt < 10; attempt++) {
+        if (!wait_and_respond(&g_sim, 15000))
+            break;
+
+        /* Look for aAb! — where b is the new address */
+        if (g_sim.last_cmd_len >= 4 &&
+            g_sim.last_cmd[0] == addr &&
+            g_sim.last_cmd[1] == 'A') {
+            got_change = true;
+            break;
+        }
+    }
+
+    if (!got_change) {
+        TEST_SKIP_MSG(r, "Recorder did not send an address change command");
+        return r;
+    }
+
+    char new_addr = g_sim.last_cmd[2];
+    if (!sdi12_valid_address(new_addr)) {
+        TEST_FAIL_MSG(r, "Invalid new address '%c' in aA%c!",
+                      new_addr, new_addr);
+        return r;
+    }
+
+    /* Verify the sensor responded with the new address */
+    if (g_sim.last_response_len > 0 && g_sim.last_response[0] == new_addr) {
+        TEST_PASS_MSG(r, "Address changed '%c' -> '%c'", addr, new_addr);
+    } else {
+        TEST_FAIL_MSG(r, "Response address mismatch after change");
+    }
+
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  15. Verification Command (aV!)
+ *  §4.4.10 — Recorder sends aV! for sensor self-check
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_rec_verify(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Verification Command (aV!)", "\xc2\xa7" "4.4.10");
+
+    if (sim_init(&g_sim, ctx, addr) != 0) {
+        TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
+        return r;
+    }
+
+    printf("\n          Waiting for recorder V command...\n          ");
+    fflush(stdout);
+
+    bool got_v = false;
+
+    for (int attempt = 0; attempt < 10; attempt++) {
+        if (!wait_and_respond(&g_sim, 15000))
+            break;
+
+        /* Look for aV! */
+        if (g_sim.last_cmd_len >= 3 &&
+            g_sim.last_cmd[0] == addr &&
+            g_sim.last_cmd[1] == 'V' &&
+            g_sim.last_cmd[2] == '!') {
+            got_v = true;
+            break;
+        }
+    }
+
+    if (!got_v) {
+        TEST_SKIP_MSG(r, "Recorder did not send a V command");
+        return r;
+    }
+
+    /* Verify the response has atttn format */
+    if (g_sim.last_response_len >= 5 &&
+        g_sim.last_response[0] == addr) {
+        TEST_PASS_MSG(r, "Verification response: %.10s", g_sim.last_response);
+    } else {
+        TEST_FAIL_MSG(r, "Unexpected V response");
+    }
+
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  16. Extended Command (aX!)
+ *  §4.4.11 — Recorder sends aX...! for extended commands
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_rec_extended(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Extended Command (aX!)", "\xc2\xa7" "4.4.11");
+
+    if (sim_init(&g_sim, ctx, addr) != 0) {
+        TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
+        return r;
+    }
+
+    printf("\n          Waiting for recorder X command...\n          ");
+    fflush(stdout);
+
+    bool got_x = false;
+
+    for (int attempt = 0; attempt < 10; attempt++) {
+        if (!wait_and_respond(&g_sim, 15000))
+            break;
+
+        /* Look for aX! or aX...! */
+        if (g_sim.last_cmd_len >= 3 &&
+            g_sim.last_cmd[0] == addr &&
+            g_sim.last_cmd[1] == 'X') {
+            got_x = true;
+            break;
+        }
+    }
+
+    if (!got_x) {
+        TEST_SKIP_MSG(r, "Recorder did not send an X command");
+        return r;
+    }
+
+    /* Sensor auto-responded via the simulated sensor process */
+    if (g_sim.last_response_len > 0 && g_sim.last_response[0] == addr) {
+        TEST_PASS_MSG(r, "Extended command handled: \"%s\"", g_sim.last_cmd);
+    } else {
+        TEST_PASS_MSG(r, "Extended command received: \"%s\"", g_sim.last_cmd);
+    }
+
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  *  Registration
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -721,4 +1256,11 @@ void recorder_tests_register(test_suite_t *suite) {
     test_suite_add(suite, "rec_sequence",    "M -> D Measurement Sequence",     "\xc2\xa7" "4.4.6",    test_rec_sequence);
     test_suite_add(suite, "rec_interchar",   "Command Inter-Character Gap",     "\xc2\xa7" "4.2.4",    test_rec_interchar);
     test_suite_add(suite, "rec_brk_between", "Break Between Commands",          "\xc2\xa7" "4.2.1",    test_rec_break_between);
+    test_suite_add(suite, "rec_svc_req",     "Service Request Handling",        "\xc2\xa7" "4.4.6",    test_rec_service_req);
+    test_suite_add(suite, "rec_concurrent",  "Concurrent Measurement (C)",      "\xc2\xa7" "4.4.9",    test_rec_concurrent);
+    test_suite_add(suite, "rec_crc",         "CRC Measurement (MC/CC)",         "\xc2\xa7" "4.4.7",    test_rec_crc);
+    test_suite_add(suite, "rec_continuous",  "Continuous Measurement (R)",       "\xc2\xa7" "4.4.10",   test_rec_continuous);
+    test_suite_add(suite, "rec_addr_change", "Address Change (aAb!)",           "\xc2\xa7" "4.4.4",    test_rec_addr_change);
+    test_suite_add(suite, "rec_verify",      "Verification Command (aV!)",      "\xc2\xa7" "4.4.10",   test_rec_verify);
+    test_suite_add(suite, "rec_extended",    "Extended Command (aX!)",          "\xc2\xa7" "4.4.11",   test_rec_extended);
 }

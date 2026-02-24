@@ -24,6 +24,7 @@ typedef enum {
 /** Result of a single test. */
 typedef struct {
     const char    *name;
+    const char    *key;           /**< Machine-readable test ID (e.g. "meas_m") */
     const char    *spec_section;
     test_status_t  status;
     char           detail[TEST_DETAIL_MAX];
@@ -69,7 +70,7 @@ void test_suite_run(test_suite_t *suite, timing_ctx_t *ctx, char addr,
 /* ── Helper macros for writing test functions ─────────────────────── */
 
 #define TEST_RESULT(n, s) \
-    (test_result_t){ .name = (n), .spec_section = (s), \
+    (test_result_t){ .name = (n), .key = NULL, .spec_section = (s), \
                      .status = TEST_PASS, .detail = {0}, \
                      .measured_us = 0, .spec_limit_us = 0 }
 

@@ -35,6 +35,7 @@ static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_dat
     t->byte_count    = 0;
     t->resp_start_us = 0;
     t->resp_end_us   = 0;
+    t->line_count    = 0;
 
     uint64_t deadline = t->hal->micros(t->hal) + (uint64_t)timeout_ms * 1000;
     size_t   pos      = 0;
@@ -54,7 +55,12 @@ static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_dat
             buf[pos++]     = c;
             t->resp_end_us = now;
 
-            if (c == '\n') break;
+            if (c == '\n') {
+                /* Record line boundary timestamp */
+                if (t->line_count < TIMING_MAX_LINES)
+                    t->line_end_us[t->line_count++] = now;
+                break;
+            }
         }
     }
 
@@ -125,6 +131,16 @@ uint64_t timing_max_interchar_gap_us(const timing_ctx_t *ctx) {
     uint64_t max_gap = 0;
     for (size_t i = 1; i < ctx->byte_count; i++) {
         uint64_t gap = ctx->byte_times_us[i] - ctx->byte_times_us[i - 1];
+        if (gap > max_gap)
+            max_gap = gap;
+    }
+    return max_gap;
+}
+
+uint64_t timing_max_interline_gap_us(const timing_ctx_t *ctx) {
+    uint64_t max_gap = 0;
+    for (uint8_t i = 1; i < ctx->line_count; i++) {
+        uint64_t gap = ctx->line_end_us[i] - ctx->line_end_us[i - 1];
         if (gap > max_gap)
             max_gap = gap;
     }

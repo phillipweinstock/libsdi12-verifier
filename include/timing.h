@@ -16,7 +16,10 @@
 #include "sdi12_master.h"
 
 /** Maximum bytes to timestamp per transaction. */
-#define TIMING_MAX_BYTES 256
+#define TIMING_MAX_BYTES 1024
+
+/** Maximum lines tracked in a multi-line extended response. */
+#define TIMING_MAX_LINES 16
 
 /**
  * @brief Timing-instrumented master context.
@@ -42,6 +45,10 @@ typedef struct {
     uint64_t            byte_times_us[TIMING_MAX_BYTES];
     size_t              byte_count;
 
+    /* Per-line timestamps (multi-line extended response support) */
+    uint64_t            line_end_us[TIMING_MAX_LINES];
+    uint8_t             line_count;
+
     /* Configuration */
     bool                use_rts;
 } timing_ctx_t;
@@ -65,6 +72,9 @@ uint64_t timing_break_duration_us(const timing_ctx_t *ctx);
 
 /** Largest inter-character gap in the most recent response (microseconds). */
 uint64_t timing_max_interchar_gap_us(const timing_ctx_t *ctx);
+
+/** Largest inter-line gap across multi-line response (microseconds). */
+uint64_t timing_max_interline_gap_us(const timing_ctx_t *ctx);
 
 /** Get the underlying libsdi12 master context for API calls. */
 static inline sdi12_master_ctx_t *timing_master(timing_ctx_t *ctx) {

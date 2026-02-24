@@ -1,6 +1,6 @@
 /**
  * @file sensor_tests.c
- * @brief SDI-12 sensor compliance tests (26 tests).
+ * @brief SDI-12 sensor compliance tests (31 tests).
  *
  * Each test exercises a specific aspect of the SDI-12 v1.4 specification.
  * Tests use the libsdi12 master API through the timing interposition
@@ -1249,6 +1249,272 @@ static test_result_t test_identify_measurement(timing_ctx_t *ctx, char addr) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ *  27. Extended Multi-line Response (aX!)
+ *  §4.4.11 — Extended commands may return multi-line responses
+ *            separated by up to 150ms inter-line gaps
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_extended_multiline(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Extended Multi-Line (aX!)", "\xc2\xa7" "4.4.11");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    /* Try a bare aX! to see if the sensor responds at all */
+    char   resp[820];
+    size_t resp_len = 0;
+    uint8_t lines = 0;
+
+    sdi12_err_t err = sdi12_master_extended_multiline(
+        timing_master(ctx), addr, "", resp, sizeof(resp),
+        &resp_len, &lines, 1000);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "No response to aX! (extended commands not supported)");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Extended command error: %d", err);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    if (lines <= 1) {
+        TEST_PASS_MSG(r, "Single-line response (%zu bytes, %d line)",
+                      resp_len, lines);
+        return r;
+    }
+
+    /* Multi-line response — check inter-line timing */
+    uint64_t max_gap = timing_max_interline_gap_us(ctx);
+    uint64_t gap_limit_us = SDI12_MULTILINE_GAP_MS * 1000;
+
+    if (max_gap > gap_limit_us) {
+        TEST_FAIL_MSG(r, "%d lines, max inter-line gap %.1f ms exceeds "
+                      "%.1f ms limit",
+                      lines, max_gap / 1000.0, gap_limit_us / 1000.0);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "%d lines, %zu bytes, max gap %.1f ms (limit: %.1f ms)",
+                  lines, resp_len, max_gap / 1000.0, gap_limit_us / 1000.0);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  28. Identify Version Field (ll)
+ *  §4.4.3 — The two-character SDI-12 version must be "13" or "14"
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_identify_version(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Identify Version Field (ll)", "\xc2\xa7" "4.4.3");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    /* Use raw transact to access the version field directly */
+    char cmd[8];
+    snprintf(cmd, sizeof(cmd), "%cI!", addr);
+    sdi12_err_t err = sdi12_master_transact(timing_master(ctx), cmd,
+                                             SDI12_RESPONSE_TIMEOUT_MS);
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_ERROR_MSG(r, "No response to aI!");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "Identify failed: error %d", err);
+        return r;
+    }
+
+    /* Response: a  ll  cccccccc mmmmmm vvv [serial] \r\n
+     *           0  1-2  3-10   11-16  17-19          */
+    size_t len = timing_master(ctx)->resp_len;
+    if (len < 20) {
+        TEST_FAIL_MSG(r, "Response too short (%zu chars)", len);
+        return r;
+    }
+
+    char v0 = timing_master(ctx)->resp_buf[1];
+    char v1 = timing_master(ctx)->resp_buf[2];
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    if ((v0 == '1' && v1 == '4') || (v0 == '1' && v1 == '3')) {
+        TEST_PASS_MSG(r, "SDI-12 version: %c%c", v0, v1);
+    } else {
+        TEST_FAIL_MSG(r, "Unexpected version field: '%c%c' (expected 13 or 14)",
+                      v0, v1);
+    }
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  29. Concurrent Measurement Groups (aC1! through aC9!)
+ *  §4.4.8
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_concurrent_groups(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Concurrent Groups (aC1-C9)", "\xc2\xa7" "4.4.8");
+
+    int  supported = 0;
+    char groups[16];
+    memset(groups, 0, sizeof(groups));
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    for (uint8_t g = 1; g <= 9; g++) {
+        sdi12_meas_response_t mresp;
+        sdi12_err_t err = sdi12_master_start_measurement(
+            timing_master(ctx), addr, SDI12_MEAS_CONCURRENT, g, false, &mresp);
+
+        if (err == SDI12_OK && mresp.value_count > 0)
+            groups[supported++] = '0' + g;
+
+        sdi12_master_send_break(timing_master(ctx));
+    }
+
+    if (supported == 0) {
+        TEST_SKIP_MSG(r, "No additional concurrent groups");
+        return r;
+    }
+
+    groups[supported] = '\0';
+    TEST_PASS_MSG(r, "%d group(s): C%s", supported, groups);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  30. Continuous Measurement Groups (aR1! through aR9!)
+ *  §4.4.9
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_continuous_groups(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Continuous Groups (aR1-R9)", "\xc2\xa7" "4.4.9");
+
+    int  supported = 0;
+    char groups[16];
+    memset(groups, 0, sizeof(groups));
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    for (uint8_t g = 1; g <= 9; g++) {
+        sdi12_data_response_t dresp;
+        sdi12_err_t err = sdi12_master_continuous(
+            timing_master(ctx), addr, g, false, &dresp);
+
+        if (err == SDI12_OK && dresp.value_count > 0)
+            groups[supported++] = '0' + g;
+
+        sdi12_master_send_break(timing_master(ctx));
+    }
+
+    if (supported == 0) {
+        TEST_SKIP_MSG(r, "No additional continuous groups");
+        return r;
+    }
+
+    groups[supported] = '\0';
+    TEST_PASS_MSG(r, "%d group(s): R%s", supported, groups);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  31. High-Volume Binary + CRC (aHBC!)
+ *  §4.4.14 + §4.4.12 — HV binary with CRC on D responses
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_hv_binary_crc(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("High-Volume Binary + CRC (aHBC!)", "\xc2\xa7" "4.4.14/12");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_BINARY, 0, true, &mresp);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not support aHBC!");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "HBC command failed: error %d", err);
+        return r;
+    }
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "Sensor reports 0 values for HBC");
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    if (mresp.wait_seconds > 0) {
+        uint32_t sr_timeout = (uint32_t)mresp.wait_seconds * 1000 + 1000;
+        err = sdi12_master_wait_service_request(
+            timing_master(ctx), addr, sr_timeout);
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(r, "No service request within %u ms", sr_timeout);
+            return r;
+        }
+    }
+
+    /* Fetch D pages — verify CRC on raw response, then decode binary */
+    uint16_t total = 0;
+    for (uint16_t page = 0; total < mresp.value_count && page < SDI12_MAX_HV_DATA_PAGES; page++) {
+        char raw[SDI12_RESP_MAX_CHARS + 4];
+        size_t raw_len = sizeof(raw);
+        err = sdi12_master_get_hv_data(timing_master(ctx), addr, page,
+                                       raw, &raw_len);
+
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(r, "D%u! failed: error %d", page, err);
+            return r;
+        }
+        if (raw_len == 0) break;
+
+        /*
+         * CRC check: get_hv_data() already called trim_crlf() on
+         * resp_buf, so the meaningful data there is exactly
+         * address (1 byte) + raw_data (raw_len bytes, incl. 3 CRC chars).
+         */
+        if (!sdi12_crc_verify(timing_master(ctx)->resp_buf, raw_len + 1)) {
+            TEST_FAIL_MSG(r, "CRC mismatch on D%u! page", page);
+            return r;
+        }
+
+        /* Strip 3 CRC chars from the data portion for binary decode */
+        if (raw_len >= 3) raw_len -= 3;
+
+        sdi12_bintype_t btype = (sdi12_bintype_t)(unsigned char)raw[0];
+        size_t elem_sz = sdi12_bintype_size(btype);
+        if (elem_sz == 0) {
+            TEST_FAIL_MSG(r, "D%u! invalid binary type 0x%02X",
+                          page, (unsigned char)raw[0]);
+            return r;
+        }
+
+        size_t payload_len = raw_len - 1;
+        if (payload_len % elem_sz != 0) {
+            TEST_FAIL_MSG(r, "D%u! payload %zu not multiple of %zu",
+                          page, payload_len, elem_sz);
+            return r;
+        }
+
+        total += (uint16_t)(payload_len / elem_sz);
+    }
+
+    if (total != mresp.value_count) {
+        TEST_FAIL_MSG(r, "Count mismatch: HBC said %d, pages gave %d",
+                      mresp.value_count, total);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "nnn=%d, %d binary values (CRC OK)", mresp.value_count, total);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  *  Registration
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -1256,6 +1522,7 @@ void sensor_tests_register(test_suite_t *suite) {
     test_suite_add(suite, "acknowledge",    "Acknowledge (a!)",                "\xc2\xa7" "4.4.2",    test_acknowledge);
     test_suite_add(suite, "query_address",  "Query Address (?!)",              "\xc2\xa7" "4.4.1",    test_query_address);
     test_suite_add(suite, "identify",       "Identify (aI!)",                  "\xc2\xa7" "4.4.3",    test_identify);
+    test_suite_add(suite, "identify_ver",   "Identify Version Field (ll)",     "\xc2\xa7" "4.4.3",    test_identify_version);
     test_suite_add(suite, "wrong_addr",     "Wrong Address Silence",           "\xc2\xa7" "4.3",      test_wrong_address_silence);
     test_suite_add(suite, "response_time",  "Response Timing (<=15ms)",        "\xc2\xa7" "4.2.3",    test_response_timing);
     test_suite_add(suite, "interchar_gap",  "Inter-Character Gap (<=1.66ms)",  "\xc2\xa7" "4.2.4",    test_interchar_gap);
@@ -1272,11 +1539,15 @@ void sensor_tests_register(test_suite_t *suite) {
     test_suite_add(suite, "addr_change",    "Address Change (aAb!)",           "\xc2\xa7" "4.4.4",    test_address_change);
     test_suite_add(suite, "break_abort",    "Break Aborts Measurement",        "\xc2\xa7" "4.2.1",    test_break_abort);
     test_suite_add(suite, "extended",       "Extended Command (aX!)",          "\xc2\xa7" "4.4.11",   test_extended);
+    test_suite_add(suite, "extended_ml",    "Extended Multi-Line (aX!)",       "\xc2\xa7" "4.4.11",   test_extended_multiline);
     test_suite_add(suite, "meas_groups",    "Measurement Groups (aM1-M9)",     "\xc2\xa7" "4.4.6",    test_measurement_groups);
+    test_suite_add(suite, "conc_groups",    "Concurrent Groups (aC1-C9)",      "\xc2\xa7" "4.4.8",    test_concurrent_groups);
+    test_suite_add(suite, "cont_groups",    "Continuous Groups (aR1-R9)",      "\xc2\xa7" "4.4.9",    test_continuous_groups);
     test_suite_add(suite, "bus_scan",       "Full Bus Scan (62 addresses)",    "\xc2\xa7" "4.4.1",    test_bus_scan);
     test_suite_add(suite, "resp_compliance","Response Compliance",             "\xc2\xa7" "4.3/4.4",  test_response_compliance);
     test_suite_add(suite, "hv_ascii",       "High-Volume ASCII (aHA!)",        "\xc2\xa7" "4.4.13",   test_hv_ascii);
     test_suite_add(suite, "hv_ascii_crc",   "High-Volume ASCII+CRC (aHAC!)",   "\xc2\xa7" "4.4.13/12",test_hv_ascii_crc);
     test_suite_add(suite, "hv_binary",      "High-Volume Binary (aHB!)",       "\xc2\xa7" "4.4.14",   test_hv_binary);
+    test_suite_add(suite, "hv_binary_crc",  "High-Volume Binary+CRC (aHBC!)",  "\xc2\xa7" "4.4.14/12",test_hv_binary_crc);
     test_suite_add(suite, "identify_meas",  "Identify Measurement (aIM!)",     "\xc2\xa7" "4.4.15",   test_identify_measurement);
 }

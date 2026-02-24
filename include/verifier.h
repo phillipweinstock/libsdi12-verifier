@@ -30,6 +30,7 @@ typedef struct {
     bool              use_rts;
     bool              use_color;
     bool              hex_monitor;   /**< Show raw hex bytes in monitor mode */
+    bool              self_test;    /**< Loopback self-test (no hardware)   */
     const char       *test_filter;  /**< Run only tests matching this name (NULL = all) */
 
     /* Runtime */

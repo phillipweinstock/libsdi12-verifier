@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(libsdi12-verifier VERSION 0.4.0 LANGUAGES C)
+project(libsdi12-verifier VERSION 0.6.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -20,6 +20,9 @@ if(WIN32)
 else()
     set(HAL_SOURCES hal/hal_posix.c)
 endif()
+
+# Loopback HAL is always compiled (used by --self-test)
+list(APPEND HAL_SOURCES hal/hal_loopback.c)
 
 # ── Verifier executable ──────────────────────────────────────────────
 add_executable(sdi12-verifier

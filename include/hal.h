@@ -62,6 +62,9 @@ static inline hal_serial_config_t hal_sdi12_default(const char *port) {
 /** Create a HAL instance for the current platform. */
 hal_t *hal_create_default(void);
 
+/** Create an in-memory loopback HAL with a simulated sensor (no hardware). */
+hal_t *hal_create_loopback(char addr);
+
 /** Destroy a HAL instance and free resources. */
 void   hal_destroy(hal_t *hal);
 

@@ -172,7 +172,7 @@ void report_print_json(const report_t *rpt, FILE *out) {
 
     fprintf(out, "{\n");
     fprintf(out, "  \"tool\": \"libsdi12-verifier\",\n");
-    fprintf(out, "  \"version\": \"0.4.0\",\n");
+    fprintf(out, "  \"version\": \"0.5.0\",\n");
     fprintf(out, "  \"timestamp\": \"%s\",\n", timebuf);
     fprintf(out, "  \"suite\": ");  json_str(out, rpt->suite_name); fprintf(out, ",\n");
     fprintf(out, "  \"port\": ");   json_str(out, rpt->device_port); fprintf(out, ",\n");
@@ -201,6 +201,7 @@ void report_print_json(const report_t *rpt, FILE *out) {
     for (size_t i = 0; i < rpt->count; i++) {
         const test_result_t *t = &rpt->results[i];
         fprintf(out, "    {\n");
+        fprintf(out, "      \"key\": ");     json_str(out, t->key ? t->key : ""); fprintf(out, ",\n");
         fprintf(out, "      \"name\": ");    json_str(out, t->name); fprintf(out, ",\n");
         fprintf(out, "      \"spec\": ");    json_str(out, t->spec_section ? t->spec_section : ""); fprintf(out, ",\n");
         fprintf(out, "      \"status\": \"%s\",\n", status_str(t->status));

@@ -71,8 +71,9 @@ void test_suite_run(test_suite_t *suite, timing_ctx_t *ctx, char addr,
 
         test_result_t r = e->fn(ctx, addr);
 
-        /* Ensure name and spec are set from registration if not by test */
+        /* Ensure name, key, and spec are set from registration */
         if (!r.name)         r.name = e->description;
+        if (!r.key)          r.key  = e->name;
         if (!r.spec_section) r.spec_section = e->spec_section;
 
         switch (r.status) {

@@ -10,7 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VERSION "0.4.0"
+#define VERSION "0.6.0"
+
+/* Exit codes — CI-friendly */
+#define EXIT_PASS   0   /**< All tests passed                        */
+#define EXIT_FAIL   1   /**< One or more tests failed                */
+#define EXIT_ERROR  2   /**< Internal error (bad args, port, etc.)   */
 
 /* ══════════════════════════════════════════════════════════════════════
  *  CLI
@@ -49,6 +54,7 @@ static void print_usage(const char *prog) {
         "Modes:\n"
         "  --test-sensor         Test a real SDI-12 sensor (default)\n"
         "  --test-recorder       Test a data recorder (simulated sensor)\n"
+        "  --self-test           Loopback self-test (no hardware needed)\n"
         "  --monitor             Passive bus monitor / sniffer\n"
         "  --transparent         Interactive command mode (send/receive)\n"
         "\n"
@@ -118,6 +124,7 @@ static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
         }
         else if (strcmp(argv[i], "--test-sensor") == 0)    ctx->mode = MODE_SENSOR_TEST;
         else if (strcmp(argv[i], "--test-recorder") == 0)  ctx->mode = MODE_RECORDER_TEST;
+        else if (strcmp(argv[i], "--self-test") == 0)       { ctx->mode = MODE_SENSOR_TEST; ctx->self_test = true; }
         else if (strcmp(argv[i], "--monitor") == 0)         ctx->mode = MODE_MONITOR;
         else if (strcmp(argv[i], "--transparent") == 0)     ctx->mode = MODE_TRANSPARENT;
         else if (strcmp(argv[i], "--rts") == 0)             ctx->use_rts = true;
@@ -132,7 +139,7 @@ static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
         }
     }
 
-    if (!ctx->port) {
+    if (!ctx->port && !ctx->self_test) {
         fprintf(stderr, "Error: --port is required\n\n");
         print_usage(argv[0]);
         return -1;
@@ -146,18 +153,33 @@ static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 int verifier_init(verifier_ctx_t *ctx) {
-    ctx->hal = hal_create_default();
-    if (!ctx->hal) {
-        fprintf(stderr, "Error: failed to create platform HAL\n");
-        return -1;
-    }
-
-    hal_serial_config_t cfg = hal_sdi12_default(ctx->port);
-    if (ctx->hal->open(ctx->hal, &cfg) != 0) {
-        fprintf(stderr, "Error: cannot open %s\n", ctx->port);
-        hal_destroy(ctx->hal);
-        ctx->hal = NULL;
-        return -1;
+    if (ctx->self_test) {
+        ctx->hal = hal_create_loopback(ctx->addr);
+        if (!ctx->hal) {
+            fprintf(stderr, "Error: failed to create loopback HAL\n");
+            return -1;
+        }
+        /* Open with dummy config — loopback ignores serial settings */
+        hal_serial_config_t cfg = hal_sdi12_default("loopback");
+        if (ctx->hal->open(ctx->hal, &cfg) != 0) {
+            fprintf(stderr, "Error: loopback sensor init failed\n");
+            hal_destroy(ctx->hal);
+            ctx->hal = NULL;
+            return -1;
+        }
+    } else {
+        ctx->hal = hal_create_default();
+        if (!ctx->hal) {
+            fprintf(stderr, "Error: failed to create platform HAL\n");
+            return -1;
+        }
+        hal_serial_config_t cfg = hal_sdi12_default(ctx->port);
+        if (ctx->hal->open(ctx->hal, &cfg) != 0) {
+            fprintf(stderr, "Error: cannot open %s\n", ctx->port);
+            hal_destroy(ctx->hal);
+            ctx->hal = NULL;
+            return -1;
+        }
     }
 
     if (timing_init(&ctx->timing, ctx->hal, ctx->use_rts) != 0) {
@@ -169,11 +191,13 @@ int verifier_init(verifier_ctx_t *ctx) {
     }
 
     const char *mode_name =
+        ctx->self_test                  ? "Self-Test (Loopback)" :
         ctx->mode == MODE_SENSOR_TEST   ? "Sensor Compliance" :
         ctx->mode == MODE_RECORDER_TEST ? "Recorder Compliance" :
         ctx->mode == MODE_TRANSPARENT   ? "Transparent" :
                                           "Bus Monitor";
-    report_init(&ctx->report, mode_name, ctx->port, ctx->addr);
+    const char *port_name = ctx->self_test ? "loopback" : ctx->port;
+    report_init(&ctx->report, mode_name, port_name, ctx->addr);
     ctx->report.use_color = ctx->use_color;
 
     return 0;
@@ -217,7 +241,10 @@ int verifier_run_sensor_tests(verifier_ctx_t *ctx) {
 
     if (ctx->verbose) {
         print_banner();
-        printf("  Port:    %s\n", ctx->port);
+        if (ctx->self_test)
+            printf("  Mode:    Self-test (loopback — no hardware)\n");
+        else
+            printf("  Port:    %s\n", ctx->port);
         printf("  Address: '%c'\n", ctx->addr);
         if (ctx->report.has_ident) {
             printf("  Sensor:  %.8s / %.6s (FW %.3s)\n",
@@ -236,7 +263,9 @@ int verifier_run_sensor_tests(verifier_ctx_t *ctx) {
     size_t pass, fail, skip, error;
     report_summary(&ctx->report, &pass, &fail, &skip, &error);
 
-    return (fail > 0 || error > 0) ? 1 : 0;
+    if (error > 0) return EXIT_ERROR;
+    if (fail  > 0) return EXIT_FAIL;
+    return EXIT_PASS;
 }
 
 int verifier_run_recorder_tests(verifier_ctx_t *ctx) {
@@ -265,7 +294,9 @@ int verifier_run_recorder_tests(verifier_ctx_t *ctx) {
     size_t pass, fail, skip, error;
     report_summary(&ctx->report, &pass, &fail, &skip, &error);
 
-    return (fail > 0 || error > 0) ? 1 : 0;
+    if (error > 0) return EXIT_ERROR;
+    if (fail  > 0) return EXIT_FAIL;
+    return EXIT_PASS;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -276,10 +307,10 @@ int main(int argc, char **argv) {
     verifier_ctx_t ctx;
 
     if (parse_args(argc, argv, &ctx) != 0)
-        return 1;
+        return EXIT_ERROR;
 
     if (verifier_init(&ctx) != 0)
-        return 1;
+        return EXIT_ERROR;
 
     int rc = verifier_run(&ctx);
 
