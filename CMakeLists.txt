@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(libsdi12-verifier VERSION 0.1.0 LANGUAGES C)
+project(libsdi12-verifier VERSION 0.4.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -30,6 +30,7 @@ add_executable(sdi12-verifier
     src/recorder_tests.c
     src/monitor.c
     src/reporter.c
+    src/transparent.c
     ${HAL_SOURCES}
 )
 

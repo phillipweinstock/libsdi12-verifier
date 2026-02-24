@@ -109,7 +109,7 @@ Any USB-to-TTL serial adapter that supports **1200 baud 7E1**:
 | CP2102 | ~$3 | Good general purpose |
 | CH340 | ~$2 | Budget option |
 
-Plus an **SDI-12 level shifter** or DIY inverter circuit to convert between UART (0–3.3V) and SDI-12 (0–5V inverted logic).
+Plus an **SDI-12 level shifter** or DIY inverter circuit to convert between the UART logic levels (typically 0–3.3V or 0–5V) and the SDI-12 bus (typically 0–5V or 0–12V, inverted logic).
 
 Total hardware cost: around $5–15
 
@@ -182,7 +182,7 @@ make
 - [x] Windows + Linux/macOS HAL
 - [x] Text + JSON compliance reports
 - [x] Bus monitor mode
-- [ ] Recorder compliance tests (verifier simulates sensor)
+- [x] Recorder compliance tests (verifier simulates sensor)
 - [ ] GUI frontend (ImGui / tauri)
 - [ ] Automated CI with simulated sensors
 - [ ] Hardware-in-the-loop test mode

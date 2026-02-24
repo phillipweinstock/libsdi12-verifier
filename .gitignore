@@ -1,5 +1,14 @@
 build/
+build-wsl/
 .vscode/
 *.exe
 *.o
 *.obj
+*.a
+.ninja_deps
+.ninja_log
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+MONITOR_DECODE_PLAN.md

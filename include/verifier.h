@@ -15,6 +15,7 @@ typedef enum {
     MODE_SENSOR_TEST,       /**< Test a real sensor (verifier = master)      */
     MODE_RECORDER_TEST,     /**< Test a data recorder (verifier = sensor)    */
     MODE_MONITOR,           /**< Passive bus monitor / sniffer               */
+    MODE_TRANSPARENT,       /**< Interactive transparent command mode        */
 } verifier_mode_t;
 
 /** Complete verifier state. */
@@ -27,6 +28,9 @@ typedef struct {
     const char       *output_file;
     bool              verbose;
     bool              use_rts;
+    bool              use_color;
+    bool              hex_monitor;   /**< Show raw hex bytes in monitor mode */
+    const char       *test_filter;  /**< Run only tests matching this name (NULL = all) */
 
     /* Runtime */
     hal_t            *hal;
@@ -45,6 +49,7 @@ void verifier_cleanup(verifier_ctx_t *ctx);
 int verifier_run_sensor_tests(verifier_ctx_t *ctx);
 int verifier_run_recorder_tests(verifier_ctx_t *ctx);
 int verifier_run_monitor(verifier_ctx_t *ctx);
+int verifier_run_transparent(verifier_ctx_t *ctx);
 
 /* ── Test suite registration (called by mode runners) ─────────────── */
 

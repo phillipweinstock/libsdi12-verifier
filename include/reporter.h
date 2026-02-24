@@ -6,6 +6,7 @@
 #define REPORTER_H
 
 #include "test_suite.h"
+#include "sdi12.h"
 #include <stdio.h>
 
 /** Output format. */
@@ -22,6 +23,9 @@ typedef struct {
     const char    *device_port;
     char           device_addr;
     const char    *sdi12_version;
+    bool           use_color;     /**< Use ANSI color in text output      */
+    bool           has_ident;     /**< Sensor identity was captured       */
+    sdi12_ident_t  ident;         /**< Sensor aI! identification fields   */
 } report_t;
 
 void report_init(report_t *rpt, const char *suite, const char *port, char addr);

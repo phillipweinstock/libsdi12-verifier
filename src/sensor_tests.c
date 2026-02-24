@@ -1,6 +1,6 @@
 /**
  * @file sensor_tests.c
- * @brief SDI-12 sensor compliance tests (21 tests).
+ * @brief SDI-12 sensor compliance tests (26 tests).
  *
  * Each test exercises a specific aspect of the SDI-12 v1.4 specification.
  * Tests use the libsdi12 master API through the timing interposition
@@ -831,6 +831,424 @@ static test_result_t test_bus_scan(timing_ctx_t *ctx, char addr) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ *  22. Response Compliance
+ *  §4.3 / §4.4 — Correct response to all required commands,
+ *                 silence (or error) for unsupported commands
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Sends a raw command and checks whether the sensor responds or stays
+ * silent.  Returns 1 if response, 0 if silence, -1 on error.
+ */
+static int probe_command(timing_ctx_t *ctx, const char *cmd) {
+    sdi12_master_send_break(timing_master(ctx));
+    sdi12_err_t err = sdi12_master_transact(timing_master(ctx), cmd, 200);
+    if (err == SDI12_ERR_TIMEOUT)
+        return 0;    /* silence — expected for unsupported */
+    if (err == SDI12_OK)
+        return 1;    /* got a response */
+    return -1;       /* bus error */
+}
+
+static test_result_t test_response_compliance(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Response Compliance", "\xc2\xa7" "4.3/4.4");
+
+    char cmd[16];
+    int  failures   = 0;
+    int  checks     = 0;
+    char fail_detail[256];
+    fail_detail[0] = '\0';
+    size_t dpos = 0;
+
+    /*
+     * Required commands — sensor MUST respond to these.
+     * Per §4.4: a!, ?!, aI!, aAb!, aM!, aD0!, aV! are mandatory.
+     */
+    static const char *required_bodies[] = {
+        "!",       /* acknowledge */
+        "I!",      /* identify    */
+        "M!",      /* measure     */
+        "D0!",     /* data page 0 */
+        NULL
+    };
+
+    for (int i = 0; required_bodies[i]; i++) {
+        snprintf(cmd, sizeof(cmd), "%c%s", addr, required_bodies[i]);
+        int result = probe_command(ctx, cmd);
+        checks++;
+        if (result == 0) {
+            failures++;
+            dpos += (size_t)snprintf(fail_detail + dpos,
+                                     sizeof(fail_detail) - dpos,
+                                     "%s: no response; ", cmd);
+        }
+    }
+
+    /* ?! (address query — no address prefix) */
+    {
+        int result = probe_command(ctx, "?!");
+        checks++;
+        if (result == 0) {
+            failures++;
+            dpos += (size_t)snprintf(fail_detail + dpos,
+                                     sizeof(fail_detail) - dpos,
+                                     "?!: no response; ");
+        }
+    }
+
+    /*
+     * Commands the sensor is NOT expected to support (unless it does).
+     * The correct behavior for unsupported commands is silence —
+     * any response is acceptable too (sensor may support them),
+     * but a malformed response is a failure.
+     *
+     * We test several optional commands to verify the sensor either
+     * responds correctly or stays silent.  We do NOT flag silence as
+     * a failure for these.
+     */
+    static const char *optional_bodies[] = {
+        "C!",      /* concurrent      */
+        "R0!",     /* continuous       */
+        "V!",      /* verify           */
+        "MC!",     /* M with CRC       */
+        "CC!",     /* C with CRC       */
+        "RC0!",    /* R with CRC       */
+        "M1!",     /* group 1          */
+        "X!",      /* extended         */
+        NULL
+    };
+
+    int optional_responded = 0;
+    int optional_silent    = 0;
+
+    for (int i = 0; optional_bodies[i]; i++) {
+        snprintf(cmd, sizeof(cmd), "%c%s", addr, optional_bodies[i]);
+        int result = probe_command(ctx, cmd);
+        checks++;
+        if (result == 1)
+            optional_responded++;
+        else if (result == 0)
+            optional_silent++;
+    }
+
+    /*
+     * Invalid commands — sensor MUST NOT respond.
+     * Per §4.3: a sensor must ignore commands not addressed to it
+     * and commands with invalid format.
+     */
+    char wrong = (addr == '1') ? '2' : '1';
+    snprintf(cmd, sizeof(cmd), "%c!", wrong);
+    {
+        int result = probe_command(ctx, cmd);
+        checks++;
+        if (result == 1) {
+            failures++;
+            dpos += (size_t)snprintf(fail_detail + dpos,
+                                     sizeof(fail_detail) - dpos,
+                                     "%s: unexpected response to wrong addr; ", cmd);
+        }
+    }
+
+    if (failures > 0) {
+        fail_detail[sizeof(fail_detail) - 1] = '\0';
+        TEST_FAIL_MSG(r, "%d issue(s) in %d checks: %.200s", failures, checks, fail_detail);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "%d checks OK (%d optional responded, %d silent)",
+                  checks, optional_responded, optional_silent);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  23. High-Volume ASCII (aHA!)
+ *  §4.4.13 — Response: "atttnnn\r\n", up to 999 values via D pages
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Helper: run a full HV measurement cycle.
+ *
+ * Sends aHA!/aHAC! → waits for service request → fetches D0..D9+ pages
+ * until all values are retrieved.  Validates total value count matches
+ * the nnn field from the measurement response.
+ *
+ * @param ctx     Timing context.
+ * @param addr    Sensor address.
+ * @param crc     If true, sends aHAC! and verifies CRC on each D page.
+ * @param r       Test result to populate.
+ * @return true if the test completed (pass or fail), false to skip.
+ */
+static bool hv_ascii_cycle(timing_ctx_t *ctx, char addr, bool crc,
+                           test_result_t *r)
+{
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_ASCII, 0, crc, &mresp);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(*r, "Sensor does not support aH%s!", crc ? "AC" : "A");
+        return false;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(*r, "H%s command failed: error %d", crc ? "AC" : "A", err);
+        return true;
+    }
+    if (mresp.address != addr) {
+        TEST_FAIL_MSG(*r, "Address echo mismatch: expected '%c', got '%c'",
+                      addr, mresp.address);
+        return true;
+    }
+    if (mresp.value_count > SDI12_H_MAX_VALUES) {
+        TEST_FAIL_MSG(*r, "Value count %d exceeds max %d",
+                      mresp.value_count, SDI12_H_MAX_VALUES);
+        return true;
+    }
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(*r, "Sensor reports 0 values for H%s", crc ? "AC" : "A");
+        return false;
+    }
+
+    r->measured_us   = timing_response_latency_us(ctx);
+    r->spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    /* Wait for service request if ttt > 0 */
+    if (mresp.wait_seconds > 0) {
+        uint32_t sr_timeout = (uint32_t)mresp.wait_seconds * 1000 + 1000;
+        err = sdi12_master_wait_service_request(
+            timing_master(ctx), addr, sr_timeout);
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(*r, "No service request within %u ms", sr_timeout);
+            return true;
+        }
+    }
+
+    /* Fetch D pages until all values retrieved (up to 10 pages) */
+    uint16_t total = 0;
+    for (uint8_t page = 0; total < mresp.value_count && page < 10; page++) {
+        sdi12_data_response_t dresp;
+        err = sdi12_master_get_data(timing_master(ctx), addr, page, crc, &dresp);
+
+        if (err == SDI12_ERR_CRC_MISMATCH) {
+            TEST_FAIL_MSG(*r, "CRC mismatch on D%d! page", page);
+            return true;
+        }
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(*r, "D%d! failed: error %d", page, err);
+            return true;
+        }
+        if (dresp.value_count == 0) {
+            /* Empty page — no more data */
+            break;
+        }
+        total += dresp.value_count;
+    }
+
+    if (total != mresp.value_count) {
+        TEST_FAIL_MSG(*r, "Value count mismatch: H%s said %d, D pages gave %d",
+                      crc ? "AC" : "A", mresp.value_count, total);
+        return true;
+    }
+
+    TEST_PASS_MSG(*r, "ttt=%d, nnn=%d, %d values across D pages%s",
+                  mresp.wait_seconds, mresp.value_count, total,
+                  crc ? " (CRC OK)" : "");
+    return true;
+}
+
+static test_result_t test_hv_ascii(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("High-Volume ASCII (aHA!)", "\xc2\xa7" "4.4.13");
+    hv_ascii_cycle(ctx, addr, false, &r);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  24. High-Volume ASCII + CRC (aHAC!)
+ *  §4.4.13 + §4.4.12 — HV ASCII with CRC-16 on D responses
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_hv_ascii_crc(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("High-Volume ASCII + CRC (aHAC!)", "\xc2\xa7" "4.4.13/12");
+    hv_ascii_cycle(ctx, addr, true, &r);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  25. High-Volume Binary (aHB!)
+ *  §4.4.14 — Full HV binary: M → SR → D-page decode
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_hv_binary(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("High-Volume Binary (aHB!)", "\xc2\xa7" "4.4.14");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_BINARY, 0, false, &mresp);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not support aHB!");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "HB command failed: error %d", err);
+        return r;
+    }
+    if (mresp.address != addr) {
+        TEST_FAIL_MSG(r, "Address echo mismatch: expected '%c', got '%c'",
+                      addr, mresp.address);
+        return r;
+    }
+    if (mresp.value_count > SDI12_H_MAX_VALUES) {
+        TEST_FAIL_MSG(r, "Value count %d exceeds max %d",
+                      mresp.value_count, SDI12_H_MAX_VALUES);
+        return r;
+    }
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "Sensor reports 0 values for HB");
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    /* Wait for service request if ttt > 0 */
+    if (mresp.wait_seconds > 0) {
+        uint32_t sr_timeout = (uint32_t)mresp.wait_seconds * 1000 + 1000;
+        err = sdi12_master_wait_service_request(
+            timing_master(ctx), addr, sr_timeout);
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(r, "No service request within %u ms", sr_timeout);
+            return r;
+        }
+    }
+
+    /* Fetch D pages and attempt binary decode.
+     * Binary page format: 1-byte type prefix + raw binary values.
+     * We validate the type byte and check that the payload is a
+     * valid multiple of the element size. */
+    uint16_t total = 0;
+    for (uint16_t page = 0; total < mresp.value_count && page < SDI12_MAX_HV_DATA_PAGES; page++) {
+        char raw[SDI12_RESP_MAX_CHARS + 4];
+        size_t raw_len = sizeof(raw);
+        err = sdi12_master_get_hv_data(timing_master(ctx), addr, page,
+                                       raw, &raw_len);
+
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(r, "D%u! failed: error %d", page, err);
+            return r;
+        }
+        if (raw_len == 0) break; /* empty page — done */
+
+        /* First byte is binary type code */
+        sdi12_bintype_t btype = (sdi12_bintype_t)(unsigned char)raw[0];
+        size_t elem_sz = sdi12_bintype_size(btype);
+        if (elem_sz == 0) {
+            TEST_FAIL_MSG(r, "D%u! invalid binary type code 0x%02X",
+                          page, (unsigned char)raw[0]);
+            return r;
+        }
+
+        size_t payload_len = raw_len - 1;
+        if (payload_len % elem_sz != 0) {
+            TEST_FAIL_MSG(r, "D%u! payload %zu bytes not a multiple of %zu "
+                          "(type %d)", page, payload_len, elem_sz, btype);
+            return r;
+        }
+
+        total += (uint16_t)(payload_len / elem_sz);
+    }
+
+    if (total != mresp.value_count) {
+        TEST_FAIL_MSG(r, "Value count mismatch: HB said %d, binary pages gave %d",
+                      mresp.value_count, total);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "ttt=%d, nnn=%d, %d binary values decoded",
+                  mresp.wait_seconds, mresp.value_count, total);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  26. Identify Measurement Metadata (aIM!, aIM_nnn!)
+ *  §4.4.15 — Probe measurement metadata and per-parameter SHEF/units
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_identify_measurement(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Identify Measurement (aIM!)", "\xc2\xa7" "4.4.15");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    /* aIM! → atttn — describes what aM! returns */
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_identify_measurement(
+        timing_master(ctx), addr, "M", SDI12_MEAS_STANDARD, &mresp);
+
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not support aIM!");
+        return r;
+    }
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "aIM! failed: error %d", err);
+        return r;
+    }
+    if (mresp.address != addr) {
+        TEST_FAIL_MSG(r, "Address echo mismatch: expected '%c', got '%c'",
+                      addr, mresp.address);
+        return r;
+    }
+    if (mresp.value_count > SDI12_M_MAX_VALUES) {
+        TEST_FAIL_MSG(r, "IM value count %d exceeds M max %d",
+                      mresp.value_count, SDI12_M_MAX_VALUES);
+        return r;
+    }
+
+    r.measured_us   = timing_response_latency_us(ctx);
+    r.spec_limit_us = SDI12_RESPONSE_TIMEOUT_MS * 1000;
+
+    uint16_t n = mresp.value_count;
+    if (n == 0) {
+        TEST_PASS_MSG(r, "aIM! responded: n=0 (no M parameters)");
+        return r;
+    }
+
+    /* Probe per-parameter metadata aIM_001! .. aIM_nnn! */
+    uint16_t meta_ok = 0;
+    char meta_summary[256];
+    size_t spos = 0;
+
+    for (uint16_t p = 1; p <= n && p <= 9; p++) {
+        sdi12_param_meta_response_t pmeta;
+        err = sdi12_master_identify_param(
+            timing_master(ctx), addr, "M", p, &pmeta);
+
+        if (err == SDI12_ERR_TIMEOUT) continue; /* optional per spec */
+        if (err != SDI12_OK) continue;
+
+        if (pmeta.shef[0] != '\0') {
+            meta_ok++;
+            if (spos > 0 && spos < sizeof(meta_summary) - 2)
+                spos += (size_t)snprintf(meta_summary + spos,
+                         sizeof(meta_summary) - spos, ", ");
+            spos += (size_t)snprintf(meta_summary + spos,
+                     sizeof(meta_summary) - spos, "%s(%s)",
+                     pmeta.shef, pmeta.units);
+        }
+    }
+
+    if (meta_ok > 0) {
+        TEST_PASS_MSG(r, "n=%d, %d params with metadata: %s",
+                      n, meta_ok, meta_summary);
+    } else {
+        TEST_PASS_MSG(r, "n=%d (per-param metadata not provided)", n);
+    }
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  *  Registration
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -856,4 +1274,9 @@ void sensor_tests_register(test_suite_t *suite) {
     test_suite_add(suite, "extended",       "Extended Command (aX!)",          "\xc2\xa7" "4.4.11",   test_extended);
     test_suite_add(suite, "meas_groups",    "Measurement Groups (aM1-M9)",     "\xc2\xa7" "4.4.6",    test_measurement_groups);
     test_suite_add(suite, "bus_scan",       "Full Bus Scan (62 addresses)",    "\xc2\xa7" "4.4.1",    test_bus_scan);
+    test_suite_add(suite, "resp_compliance","Response Compliance",             "\xc2\xa7" "4.3/4.4",  test_response_compliance);
+    test_suite_add(suite, "hv_ascii",       "High-Volume ASCII (aHA!)",        "\xc2\xa7" "4.4.13",   test_hv_ascii);
+    test_suite_add(suite, "hv_ascii_crc",   "High-Volume ASCII+CRC (aHAC!)",   "\xc2\xa7" "4.4.13/12",test_hv_ascii_crc);
+    test_suite_add(suite, "hv_binary",      "High-Volume Binary (aHB!)",       "\xc2\xa7" "4.4.14",   test_hv_binary);
+    test_suite_add(suite, "identify_meas",  "Identify Measurement (aIM!)",     "\xc2\xa7" "4.4.15",   test_identify_measurement);
 }

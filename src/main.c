@@ -10,22 +10,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VERSION "0.1.0"
+#define VERSION "0.4.0"
 
 /* ══════════════════════════════════════════════════════════════════════
  *  CLI
  * ══════════════════════════════════════════════════════════════════════ */
 
 static void print_banner(void) {
+#ifdef _WIN32
+    printf(
+        "\n"
+        "  +------------------------------------------------------+\n"
+        "  |            libsdi12-verifier v" VERSION "                  |\n"
+        "  |            Open-Source SDI-12 Compliance Tester      |\n"
+        "  |            Built on libsdi12 -- MIT License          |\n"
+        "  +------------------------------------------------------+\n"
+        "\n"
+    );
+#else
     printf(
         "\n"
         "  ┌──────────────────────────────────────────────────────┐\n"
-        "  │  libsdi12-verifier v" VERSION "                          │\n"
-        "  │  Open-Source SDI-12 Compliance Tester                │\n"
-        "  │  Built on libsdi12 — MIT License                    │\n"
+        "  │            libsdi12-verifier v" VERSION "                  │\n"
+        "  │            Open-Source SDI-12 Compliance Tester      │\n"
+        "  │            Built on libsdi12 — MIT License           │\n"
         "  └──────────────────────────────────────────────────────┘\n"
         "\n"
     );
+#endif
 }
 
 static void print_usage(const char *prog) {
@@ -38,13 +50,18 @@ static void print_usage(const char *prog) {
         "  --test-sensor         Test a real SDI-12 sensor (default)\n"
         "  --test-recorder       Test a data recorder (simulated sensor)\n"
         "  --monitor             Passive bus monitor / sniffer\n"
+        "  --transparent         Interactive command mode (send/receive)\n"
         "\n"
         "Options:\n"
         "  --port <port>    -p   Serial port (e.g. COM3, /dev/ttyUSB0)\n"
         "  --addr <a>       -a   Sensor address, 0-9/A-Z/a-z (default: 0)\n"
+        "  --test <name>    -t   Run only matching test(s) by name\n"
         "  --format <fmt>   -f   Output: text, json (default: text)\n"
         "  --output <file>  -o   Output file (default: stdout)\n"
         "  --rts                 Use RTS line for TX/RX direction control\n"
+        "  --hex                 Show raw hex bytes in monitor mode\n"
+        "  --color               Force colored output\n"
+        "  --no-color            Disable colored output\n"
         "  --verbose        -v   Verbose output during testing\n"
         "  --help           -h   Show this help\n"
         "  --version             Show version\n"
@@ -52,17 +69,21 @@ static void print_usage(const char *prog) {
         "Examples:\n"
         "  %s --port COM3 --test-sensor --addr 0\n"
         "  %s --port /dev/ttyUSB0 --test-sensor -f json -o report.json\n"
+        "  %s --port COM3 --transparent\n"
+        "  %s --port COM3 --test-sensor --test acknowledge\n"
         "  %s --port COM3 --monitor\n"
         "\n",
-        prog, prog, prog, prog
+        prog, prog, prog, prog, prog, prog
     );
 }
 
 static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
     memset(ctx, 0, sizeof(*ctx));
-    ctx->addr   = '0';
-    ctx->mode   = MODE_SENSOR_TEST;
-    ctx->format = REPORT_TEXT;
+    ctx->addr        = '0';
+    ctx->mode        = MODE_SENSOR_TEST;
+    ctx->format      = REPORT_TEXT;
+    ctx->use_color   = true;   /* default: color on if stdout is a tty */
+    ctx->test_filter = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -82,6 +103,10 @@ static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
             if (++i >= argc) { fprintf(stderr, "Error: --addr requires argument\n"); return -1; }
             ctx->addr = argv[i][0];
         }
+        else if (strcmp(argv[i], "--test") == 0 || strcmp(argv[i], "-t") == 0) {
+            if (++i >= argc) { fprintf(stderr, "Error: --test requires argument\n"); return -1; }
+            ctx->test_filter = argv[i];
+        }
         else if (strcmp(argv[i], "--format") == 0 || strcmp(argv[i], "-f") == 0) {
             if (++i >= argc) { fprintf(stderr, "Error: --format requires argument\n"); return -1; }
             if (strcmp(argv[i], "json") == 0) ctx->format = REPORT_JSON;
@@ -94,7 +119,11 @@ static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
         else if (strcmp(argv[i], "--test-sensor") == 0)    ctx->mode = MODE_SENSOR_TEST;
         else if (strcmp(argv[i], "--test-recorder") == 0)  ctx->mode = MODE_RECORDER_TEST;
         else if (strcmp(argv[i], "--monitor") == 0)         ctx->mode = MODE_MONITOR;
+        else if (strcmp(argv[i], "--transparent") == 0)     ctx->mode = MODE_TRANSPARENT;
         else if (strcmp(argv[i], "--rts") == 0)             ctx->use_rts = true;
+        else if (strcmp(argv[i], "--hex") == 0)             ctx->hex_monitor = true;
+        else if (strcmp(argv[i], "--color") == 0)           ctx->use_color = true;
+        else if (strcmp(argv[i], "--no-color") == 0)        ctx->use_color = false;
         else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0)
             ctx->verbose = true;
         else {
@@ -142,8 +171,10 @@ int verifier_init(verifier_ctx_t *ctx) {
     const char *mode_name =
         ctx->mode == MODE_SENSOR_TEST   ? "Sensor Compliance" :
         ctx->mode == MODE_RECORDER_TEST ? "Recorder Compliance" :
+        ctx->mode == MODE_TRANSPARENT   ? "Transparent" :
                                           "Bus Monitor";
     report_init(&ctx->report, mode_name, ctx->port, ctx->addr);
+    ctx->report.use_color = ctx->use_color;
 
     return 0;
 }
@@ -153,6 +184,7 @@ int verifier_run(verifier_ctx_t *ctx) {
         case MODE_SENSOR_TEST:    return verifier_run_sensor_tests(ctx);
         case MODE_RECORDER_TEST:  return verifier_run_recorder_tests(ctx);
         case MODE_MONITOR:        return verifier_run_monitor(ctx);
+        case MODE_TRANSPARENT:    return verifier_run_transparent(ctx);
     }
     return -1;
 }
@@ -171,6 +203,15 @@ int verifier_run_sensor_tests(verifier_ctx_t *ctx) {
     suite.name = "SDI-12 Sensor Compliance";
     sensor_tests_register(&suite);
 
+    /* Pre-scan: identify the sensor and store in report */
+    sdi12_master_send_break(timing_master(&ctx->timing));
+    sdi12_ident_t ident;
+    memset(&ident, 0, sizeof(ident));
+    if (sdi12_master_identify(timing_master(&ctx->timing), ctx->addr, &ident) == SDI12_OK) {
+        ctx->report.has_ident = true;
+        ctx->report.ident     = ident;
+    }
+
     test_result_t results[TEST_MAX_TESTS];
     size_t count = 0;
 
@@ -178,10 +219,18 @@ int verifier_run_sensor_tests(verifier_ctx_t *ctx) {
         print_banner();
         printf("  Port:    %s\n", ctx->port);
         printf("  Address: '%c'\n", ctx->addr);
-        printf("  Tests:   %zu\n\n", suite.count);
+        if (ctx->report.has_ident) {
+            printf("  Sensor:  %.8s / %.6s (FW %.3s)\n",
+                   ident.vendor, ident.model, ident.firmware_version);
+        }
+        printf("  Tests:   %zu\n", suite.count);
+        if (ctx->test_filter)
+            printf("  Filter:  '%s'\n", ctx->test_filter);
+        printf("\n");
     }
 
-    test_suite_run(&suite, &ctx->timing, ctx->addr, results, &count);
+    test_suite_run(&suite, &ctx->timing, ctx->addr, results, &count,
+                   ctx->test_filter);
     report_add_results(&ctx->report, results, count);
 
     size_t pass, fail, skip, error;
@@ -196,15 +245,21 @@ int verifier_run_recorder_tests(verifier_ctx_t *ctx) {
     suite.name = "SDI-12 Recorder Compliance";
     recorder_tests_register(&suite);
 
-    if (suite.count == 0) {
-        printf("Recorder tests not yet implemented.\n");
-        return 0;
-    }
-
     test_result_t results[TEST_MAX_TESTS];
     size_t count = 0;
 
-    test_suite_run(&suite, &ctx->timing, ctx->addr, results, &count);
+    if (ctx->verbose) {
+        print_banner();
+        printf("  Mode:    Recorder Test (verifier = simulated sensor)\n");
+        printf("  Port:    %s\n", ctx->port);
+        printf("  Address: '%c'\n", ctx->addr);
+        printf("  Tests:   %zu\n", suite.count);
+        printf("\n  Connect the data recorder to %s.\n", ctx->port);
+        printf("  The verifier will simulate a sensor at address '%c'.\n\n", ctx->addr);
+    }
+
+    test_suite_run(&suite, &ctx->timing, ctx->addr, results, &count,
+                   ctx->test_filter);
     report_add_results(&ctx->report, results, count);
 
     size_t pass, fail, skip, error;

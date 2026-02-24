@@ -1,6 +1,10 @@
 /**
  * @file monitor.c
  * @brief Passive SDI-12 bus monitor / sniffer with timestamped decode.
+ *
+ * Supports two display modes:
+ *   - Default:  printable chars with \r \n \xNN escapes
+ *   - Hex:      raw hex byte dump (--hex flag)
  */
 #include "verifier.h"
 #include <stdio.h>
@@ -15,9 +19,12 @@ static void monitor_signal(int sig) {
 }
 
 int verifier_run_monitor(verifier_ctx_t *ctx) {
+    const bool hex_mode = ctx->hex_monitor;
+
     printf("\n");
     printf("  ================================================================\n");
-    printf("    SDI-12 Bus Monitor — %s\n", ctx->port);
+    printf("    SDI-12 Bus Monitor — %s%s\n",
+           ctx->port, hex_mode ? " [HEX]" : "");
     printf("    Press Ctrl+C to stop\n");
     printf("  ================================================================\n\n");
     printf("  %-14s  %-4s  %s\n", "TIMESTAMP", "DIR", "DATA");
@@ -44,12 +51,17 @@ int verifier_run_monitor(verifier_ctx_t *ctx) {
 
                 printf("  %10.3f s    RX    ", secs);
 
-                for (size_t i = 0; i < line_pos; i++) {
-                    char ch = line_buf[i];
-                    if (ch == '\r')                          printf("\\r");
-                    else if (ch == '\n')                     printf("\\n");
-                    else if (ch >= 0x20 && ch < 0x7F)        printf("%c", ch);
-                    else                                     printf("\\x%02X", (unsigned char)ch);
+                if (hex_mode) {
+                    for (size_t i = 0; i < line_pos; i++)
+                        printf("%02X ", (unsigned char)line_buf[i]);
+                } else {
+                    for (size_t i = 0; i < line_pos; i++) {
+                        char ch = line_buf[i];
+                        if (ch == '\r')                          printf("\\r");
+                        else if (ch == '\n')                     printf("\\n");
+                        else if (ch >= 0x20 && ch < 0x7F)        printf("%c", ch);
+                        else                                     printf("\\x%02X", (unsigned char)ch);
+                    }
                 }
                 printf("\n");
                 fflush(stdout);
@@ -63,10 +75,15 @@ int verifier_run_monitor(verifier_ctx_t *ctx) {
     if (line_pos > 0) {
         uint64_t elapsed = ctx->hal->micros(ctx->hal) - start_us;
         printf("  %10.3f s    RX    ", elapsed / 1000000.0);
-        for (size_t i = 0; i < line_pos; i++) {
-            char ch = line_buf[i];
-            if (ch >= 0x20 && ch < 0x7F) printf("%c", ch);
-            else                          printf("\\x%02X", (unsigned char)ch);
+        if (hex_mode) {
+            for (size_t i = 0; i < line_pos; i++)
+                printf("%02X ", (unsigned char)line_buf[i]);
+        } else {
+            for (size_t i = 0; i < line_pos; i++) {
+                char ch = line_buf[i];
+                if (ch >= 0x20 && ch < 0x7F) printf("%c", ch);
+                else                          printf("\\x%02X", (unsigned char)ch);
+            }
         }
         printf("\n");
     }

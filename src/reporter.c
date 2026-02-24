@@ -6,6 +6,16 @@
 #include <string.h>
 #include <time.h>
 
+/* ── ANSI Color Codes ──────────────────────────────────────────────── */
+
+#define ANSI_RESET   "\033[0m"
+#define ANSI_GREEN   "\033[32m"
+#define ANSI_RED     "\033[31m"
+#define ANSI_YELLOW  "\033[33m"
+#define ANSI_MAGENTA "\033[35m"
+#define ANSI_BOLD    "\033[1m"
+#define ANSI_DIM     "\033[2m"
+
 void report_init(report_t *rpt, const char *suite, const char *port, char addr) {
     memset(rpt, 0, sizeof(*rpt));
     rpt->suite_name    = suite;
@@ -76,6 +86,11 @@ void report_print_text(const report_t *rpt, FILE *out) {
     char timebuf[64];
     strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", localtime(&now));
 
+    bool c = rpt->use_color;
+    const char *rst = c ? ANSI_RESET  : "";
+    const char *bld = c ? ANSI_BOLD   : "";
+    const char *dim = c ? ANSI_DIM    : "";
+
     fprintf(out, "\n");
     fprintf(out, "================================================================\n");
     fprintf(out, "  SDI-12 Compliance Report\n");
@@ -84,15 +99,33 @@ void report_print_text(const report_t *rpt, FILE *out) {
     fprintf(out, "  Port:      %s\n", rpt->device_port);
     fprintf(out, "  Address:   '%c'\n", rpt->device_addr);
     fprintf(out, "  SDI-12:    v%s\n", rpt->sdi12_version);
+    if (rpt->has_ident) {
+        fprintf(out, "  Vendor:    %.8s\n", rpt->ident.vendor);
+        fprintf(out, "  Model:     %.6s\n", rpt->ident.model);
+        fprintf(out, "  Firmware:  %.3s\n", rpt->ident.firmware_version);
+        if (rpt->ident.serial[0])
+            fprintf(out, "  Serial:    %s\n", rpt->ident.serial);
+    }
     fprintf(out, "================================================================\n\n");
 
     for (size_t i = 0; i < rpt->count; i++) {
         const test_result_t *t = &rpt->results[i];
 
-        fprintf(out, "  [%-5s] %-40s %s\n",
-                status_str(t->status),
+        const char *color = "";
+        const char *tag   = status_str(t->status);
+        if (c) {
+            switch (t->status) {
+                case TEST_PASS:  color = ANSI_GREEN;   break;
+                case TEST_FAIL:  color = ANSI_RED;     break;
+                case TEST_SKIP:  color = ANSI_YELLOW;  break;
+                case TEST_ERROR: color = ANSI_MAGENTA; break;
+            }
+        }
+
+        fprintf(out, "  [%s%s%-5s%s] %-40s %s%s%s\n",
+                bld, color, tag, rst,
                 t->name ? t->name : "(unnamed)",
-                t->spec_section ? t->spec_section : "");
+                dim, t->spec_section ? t->spec_section : "", rst);
 
         if (t->detail[0])
             fprintf(out, "          %s\n", t->detail);
@@ -110,11 +143,18 @@ void report_print_text(const report_t *rpt, FILE *out) {
     size_t pass, fail, skip, error;
     report_summary(rpt, &pass, &fail, &skip, &error);
 
+    bool compliant = (fail == 0 && error == 0);
+    const char *result_color = c ? (compliant ? ANSI_GREEN : ANSI_RED) : "";
+
     fprintf(out, "----------------------------------------------------------------\n");
-    fprintf(out, "  SUMMARY: %zu passed, %zu failed, %zu skipped, %zu errors\n",
-            pass, fail, skip, error);
-    fprintf(out, "  RESULT:  %s\n",
-            (fail == 0 && error == 0) ? "COMPLIANT" : "NON-COMPLIANT");
+    fprintf(out, "  SUMMARY: %s%zu passed%s, %s%zu failed%s, %s%zu skipped%s, %s%zu errors%s\n",
+            c ? ANSI_GREEN : "", pass, rst,
+            fail > 0 ? (c ? ANSI_RED : "") : "", fail, rst,
+            skip > 0 ? (c ? ANSI_YELLOW : "") : "", skip, rst,
+            error > 0 ? (c ? ANSI_MAGENTA : "") : "", error, rst);
+    fprintf(out, "  RESULT:  %s%s%s%s\n",
+            bld, result_color,
+            compliant ? "COMPLIANT" : "NON-COMPLIANT", rst);
     fprintf(out, "================================================================\n");
 }
 
@@ -132,12 +172,21 @@ void report_print_json(const report_t *rpt, FILE *out) {
 
     fprintf(out, "{\n");
     fprintf(out, "  \"tool\": \"libsdi12-verifier\",\n");
-    fprintf(out, "  \"version\": \"0.1.0\",\n");
+    fprintf(out, "  \"version\": \"0.4.0\",\n");
     fprintf(out, "  \"timestamp\": \"%s\",\n", timebuf);
     fprintf(out, "  \"suite\": ");  json_str(out, rpt->suite_name); fprintf(out, ",\n");
     fprintf(out, "  \"port\": ");   json_str(out, rpt->device_port); fprintf(out, ",\n");
     fprintf(out, "  \"address\": \"%c\",\n", rpt->device_addr);
     fprintf(out, "  \"sdi12_version\": \"%s\",\n", rpt->sdi12_version);
+
+    if (rpt->has_ident) {
+        fprintf(out, "  \"sensor\": {\n");
+        fprintf(out, "    \"vendor\": "); json_str(out, rpt->ident.vendor); fprintf(out, ",\n");
+        fprintf(out, "    \"model\": "); json_str(out, rpt->ident.model); fprintf(out, ",\n");
+        fprintf(out, "    \"firmware\": "); json_str(out, rpt->ident.firmware_version); fprintf(out, ",\n");
+        fprintf(out, "    \"serial\": "); json_str(out, rpt->ident.serial); fprintf(out, "\n");
+        fprintf(out, "  },\n");
+    }
 
     fprintf(out, "  \"summary\": {\n");
     fprintf(out, "    \"total\": %zu,\n", rpt->count);

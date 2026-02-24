@@ -57,9 +57,14 @@ typedef struct {
 void test_suite_add(test_suite_t *suite, const char *name,
                     const char *desc, const char *spec, test_fn_t fn);
 
-/** Run all tests in a suite, storing results. */
+/**
+ * Run all tests in a suite, storing results.
+ * @param filter  If non-NULL, only run tests whose name contains this
+ *                substring (case-insensitive match).
+ */
 void test_suite_run(test_suite_t *suite, timing_ctx_t *ctx, char addr,
-                    test_result_t *results, size_t *result_count);
+                    test_result_t *results, size_t *result_count,
+                    const char *filter);
 
 /* ── Helper macros for writing test functions ─────────────────────── */
 
