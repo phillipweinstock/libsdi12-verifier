@@ -1,0 +1,13 @@
+libsdi12-verifier (0.6.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging.
+  * Upstream release 0.6.0:
+    - 47 SDI-12 v1.4 compliance tests (31 sensor, 16 recorder).
+    - Timing measurement to microsecond precision.
+    - Plain-text and JSON output formats.
+    - Passive bus monitor and interactive transparent modes.
+    - Self-test via loopback HAL (no hardware required).
+    - Builds against system libsdi12-dev; falls back to git submodule
+      for standalone developer builds.
+
+ -- Phillip Weinstock <phillipweinstock@gmail.com>  Sun, 15 Mar 2026 12:00:00 +0000
