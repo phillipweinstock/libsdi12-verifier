@@ -1,6 +1,6 @@
 libsdi12-verifier (0.6.0-1) unstable; urgency=medium
 
-  * Initial Debian packaging.
+  * Initial Debian packaging (Closes: #1130921).
   * Upstream release 0.6.0:
     - 47 SDI-12 v1.4 compliance tests (31 sensor, 16 recorder).
     - Timing measurement to microsecond precision.
