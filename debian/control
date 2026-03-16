@@ -1,0 +1,27 @@
+Source: libsdi12-verifier
+Section: electronics
+Priority: optional
+Maintainer: Phillip Weinstock <phillipweinstock@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake (>= 3.14),
+ libsdi12-dev,
+ pkgconf,
+Standards-Version: 4.7.2.0
+Homepage: https://github.com/phillipweinstock/libsdi12-verifier
+Vcs-Git: https://github.com/phillipweinstock/libsdi12-verifier.git
+Vcs-Browser: https://github.com/phillipweinstock/libsdi12-verifier
+Rules-Requires-Root: no
+
+Package: sdi12-verifier
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: SDI-12 v1.4 compliance tester
+ Open-source compliance tester for SDI-12 v1.4 sensors and data recorders.
+ Runs 47 protocol tests covering every command type, measures response timing
+ to the microsecond, and produces plain-text or JSON compliance reports with
+ references to the relevant spec sections.
+ .
+ Supports sensor testing (verifier acts as recorder), recorder testing
+ (verifier simulates a sensor), passive bus monitoring, and an interactive
+ transparent mode for manual command entry.

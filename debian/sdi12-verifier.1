@@ -1,0 +1,114 @@
+.TH SDI12-VERIFIER 1 "March 2026" "sdi12-verifier 0.6.0" "User Commands"
+.SH NAME
+sdi12\-verifier \- SDI\-12 v1.4 compliance tester
+.SH SYNOPSIS
+.B sdi12\-verifier
+\fB\-\-port\fR \fIport\fR
+[\fB\-\-test\-sensor\fR|\fB\-\-test\-recorder\fR|\fB\-\-monitor\fR|\fB\-\-transparent\fR]
+[\fIoptions\fR]
+.br
+.B sdi12\-verifier
+\fB\-\-self\-test\fR
+.SH DESCRIPTION
+.B sdi12\-verifier
+is an open\-source SDI\-12 v1.4 compliance tester for sensors and data
+recorders.
+It connects to a device via a serial port and runs up to 47 protocol tests
+covering every command type defined in the SDI\-12 v1.4 specification.
+Response timing is measured to microsecond precision.
+Results are reported as plain text or JSON with references to the relevant
+specification sections.
+.SH MODES
+.TP
+.B \-\-test\-sensor
+Test a connected SDI\-12 sensor.
+The verifier acts as the data recorder, sends commands, and validates the
+sensor's responses.
+Runs 31 compliance tests.
+.TP
+.B \-\-test\-recorder
+Test a connected data recorder.
+The verifier simulates a sensor and validates the recorder's command
+behaviour.
+Runs 16 compliance tests.
+.TP
+.B \-\-monitor
+Passive bus monitor.
+Captures and displays raw bus traffic without participating in
+communication.
+.TP
+.B \-\-transparent
+Interactive transparent mode.
+Allows manual entry of SDI\-12 commands and displays raw responses.
+.TP
+.B \-\-self\-test
+Run a loopback self\-test.
+No hardware is required.
+Verifies the verifier's own logic against a simulated sensor/recorder pair.
+.SH OPTIONS
+.TP
+\fB\-\-port\fR \fIport\fR
+Serial port to use (e.g.\&
+.IR /dev/ttyUSB0
+or
+.IR COM3 ).
+Required for all modes except
+.BR \-\-self\-test .
+.TP
+\fB\-\-addr\fR \fIaddr\fR
+SDI\-12 sensor address to test (default:
+.BR 0 ).
+Valid addresses: 0\(en9, A\(enZ, a\(enz.
+.TP
+\fB\-\-format\fR \fBtext\fR|\fBjson\fR
+Output format for the compliance report (default:
+.BR text ).
+.TP
+\fB\-o\fR \fIfile\fR
+Write the compliance report to
+.I file
+instead of standard output.
+.TP
+.B \-\-rts
+Enable RTS direction control for half\-duplex RS\-485 adapters.
+.SH EXIT STATUS
+.TP
+.B 0
+All tests passed.
+.TP
+.B 1
+One or more tests failed.
+.TP
+.B 2
+Internal error (invalid arguments, port error, etc.).
+.SH EXAMPLES
+Test a sensor on /dev/ttyUSB0 at address 0:
+.PP
+.nf
+.RS
+sdi12\-verifier \-\-port /dev/ttyUSB0 \-\-test\-sensor \-\-addr 0
+.RE
+.fi
+.PP
+Run a self\-test (no hardware required):
+.PP
+.nf
+.RS
+sdi12\-verifier \-\-self\-test
+.RE
+.fi
+.PP
+Generate a JSON report to a file:
+.PP
+.nf
+.RS
+sdi12\-verifier \-\-port /dev/ttyUSB0 \-\-test\-sensor \-\-format json \-o report.json
+.RE
+.fi
+.SH SEE ALSO
+.BR sdi12 (3)
+.SH AUTHOR
+Phillip Weinstock <phillipweinstock@gmail.com>
+.SH COPYRIGHT
+Copyright \(co 2026 Phillip Weinstock.
+License MIT.

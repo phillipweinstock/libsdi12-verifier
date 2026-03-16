@@ -14,3 +14,16 @@ Makefile
 MONITOR_DECODE_PLAN.md
 build.ninja
 *.pdf
+
+# Quilt working directory
+.pc/
+
+# Debian build artifacts
+debian/files
+debian/*.debhelper.log
+debian/*.substvars
+debian/debhelper-build-stamp
+debian/tmp/
+debian/.debhelper/
+debian/sdi12-verifier/
+obj-x86_64-linux-gnu/
