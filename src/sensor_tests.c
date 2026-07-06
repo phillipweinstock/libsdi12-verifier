@@ -11,6 +11,7 @@
 #include "verifier.h"
 #include "sdi12.h"
 #include "sdi12_master.h"
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -20,6 +21,30 @@ static bool valid_sdi12_addr(char c) {
     return (c >= '0' && c <= '9') ||
            (c >= 'A' && c <= 'Z') ||
            (c >= 'a' && c <= 'z');
+}
+
+/**
+ * Bounded string append.  snprintf returns the length it WANTED to
+ * write, so accumulating its return value can push the cursor past the
+ * buffer — the next `bufsize - pos` then wraps around (size_t) and
+ * writes out of bounds.  This helper clamps the cursor instead.
+ */
+static void append_str(char *buf, size_t bufsize, size_t *pos,
+                       const char *fmt, ...)
+{
+    if (*pos >= bufsize - 1)
+        return;
+
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *pos, bufsize - *pos, fmt, ap);
+    va_end(ap);
+
+    if (n < 0)
+        return;
+    *pos += (size_t)n;
+    if (*pos > bufsize - 1)
+        *pos = bufsize - 1;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -878,9 +903,8 @@ static test_result_t test_response_compliance(timing_ctx_t *ctx, char addr) {
         checks++;
         if (result == 0) {
             failures++;
-            dpos += (size_t)snprintf(fail_detail + dpos,
-                                     sizeof(fail_detail) - dpos,
-                                     "%s: no response; ", cmd);
+            append_str(fail_detail, sizeof(fail_detail), &dpos,
+                       "%s: no response; ", cmd);
         }
     }
 
@@ -890,9 +914,8 @@ static test_result_t test_response_compliance(timing_ctx_t *ctx, char addr) {
         checks++;
         if (result == 0) {
             failures++;
-            dpos += (size_t)snprintf(fail_detail + dpos,
-                                     sizeof(fail_detail) - dpos,
-                                     "?!: no response; ");
+            append_str(fail_detail, sizeof(fail_detail), &dpos,
+                       "?!: no response; ");
         }
     }
 
@@ -943,9 +966,8 @@ static test_result_t test_response_compliance(timing_ctx_t *ctx, char addr) {
         checks++;
         if (result == 1) {
             failures++;
-            dpos += (size_t)snprintf(fail_detail + dpos,
-                                     sizeof(fail_detail) - dpos,
-                                     "%s: unexpected response to wrong addr; ", cmd);
+            append_str(fail_detail, sizeof(fail_detail), &dpos,
+                       "%s: unexpected response to wrong addr; ", cmd);
         }
     }
 
@@ -1264,12 +1286,10 @@ static test_result_t test_identify_measurement(timing_ctx_t *ctx, char addr) {
 
         if (pmeta.shef[0] != '\0') {
             meta_ok++;
-            if (spos > 0 && spos < sizeof(meta_summary) - 2)
-                spos += (size_t)snprintf(meta_summary + spos,
-                         sizeof(meta_summary) - spos, ", ");
-            spos += (size_t)snprintf(meta_summary + spos,
-                     sizeof(meta_summary) - spos, "%s(%s)",
-                     pmeta.shef, pmeta.units);
+            if (spos > 0)
+                append_str(meta_summary, sizeof(meta_summary), &spos, ", ");
+            append_str(meta_summary, sizeof(meta_summary), &spos,
+                       "%s(%s)", pmeta.shef, pmeta.units);
         }
     }
 

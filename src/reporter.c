@@ -3,6 +3,7 @@
  * @brief Compliance report generation — text and JSON.
  */
 #include "reporter.h"
+#include "verifier.h"
 #include <string.h>
 #include <time.h>
 
@@ -172,7 +173,7 @@ void report_print_json(const report_t *rpt, FILE *out) {
 
     fprintf(out, "{\n");
     fprintf(out, "  \"tool\": \"libsdi12-verifier\",\n");
-    fprintf(out, "  \"version\": \"0.5.0\",\n");
+    fprintf(out, "  \"version\": \"" VERIFIER_VERSION "\",\n");
     fprintf(out, "  \"timestamp\": \"%s\",\n", timebuf);
     fprintf(out, "  \"suite\": ");  json_str(out, rpt->suite_name); fprintf(out, ",\n");
     fprintf(out, "  \"port\": ");   json_str(out, rpt->device_port); fprintf(out, ",\n");

@@ -69,12 +69,17 @@ static size_t lb_ring_get(lb_ring_t *r, char *out, size_t max) {
 
 #define LB_CMD_MAX 256
 
-/** Simulated sensor values: temperature + pressure.
+/** Simulated sensor values. Nine values so ASCII D responses span more
+ *  than one page (9 × "+nn.nn" = 54 chars > the 35-char aM! page limit),
+ *  exercising the library's D0/D1 pagination during self-test.
  *  Chosen so that their IEEE-754 float32 representations contain no
  *  0x00 (NUL), 0x0A (LF), or 0x0D (CR) bytes — avoids issues with
  *  strlen-based send and newline-based recv for binary transport.    */
-#define LB_PARAM_COUNT 2
-static const float LB_VALUES[LB_PARAM_COUNT] = { 12.34f, 56.78f };
+#define LB_PARAM_COUNT 9
+static const float LB_VALUES[LB_PARAM_COUNT] = {
+    12.34f, 56.78f, 23.45f, 45.67f, 67.89f,
+    78.91f, 89.12f, 91.23f, 13.57f
+};
 
 typedef struct {
     /* Simulated sensor */
@@ -170,9 +175,10 @@ static int lb_open(hal_t *self, const hal_serial_config_t *cfg) {
     if (sdi12_sensor_init(&p->sensor, p->addr, &ident, &cb) != SDI12_OK)
         return -1;
 
-    /* Register two parameters in group 0 (M/C/R) */
-    sdi12_sensor_register_param(&p->sensor, 0, "TA", "C",   2);
-    sdi12_sensor_register_param(&p->sensor, 0, "PA", "kPa", 2);
+    /* Register one parameter per simulated value in group 0 (M/C/R) */
+    for (int i = 0; i < LB_PARAM_COUNT; i++) {
+        sdi12_sensor_register_param(&p->sensor, 0, "TA", "C", 2);
+    }
 
     return 0;
 }
@@ -255,7 +261,10 @@ static uint64_t lb_micros(hal_t *self) {
     LARGE_INTEGER freq, count;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&count);
-    return (uint64_t)(count.QuadPart * 1000000 / freq.QuadPart);
+    /* Divide before multiplying to avoid int64 overflow (~10 days uptime) */
+    uint64_t ticks = (uint64_t)count.QuadPart;
+    uint64_t f     = (uint64_t)freq.QuadPart;
+    return (ticks / f) * 1000000ULL + (ticks % f) * 1000000ULL / f;
 }
 
 static void lb_delay_ms(hal_t *self, uint32_t ms) {

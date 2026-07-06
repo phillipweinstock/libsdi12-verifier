@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VERSION "0.6.0"
+#define VERSION VERIFIER_VERSION
 
 /* Exit codes — CI-friendly */
 #define EXIT_PASS   0   /**< All tests passed                        */
@@ -142,6 +142,12 @@ static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
     if (!ctx->port && !ctx->self_test) {
         fprintf(stderr, "Error: --port is required\n\n");
         print_usage(argv[0]);
+        return -1;
+    }
+
+    if (ctx->self_test && ctx->mode != MODE_SENSOR_TEST) {
+        fprintf(stderr, "Error: --self-test cannot be combined with "
+                        "--monitor, --transparent, or --test-recorder\n");
         return -1;
     }
 

@@ -116,9 +116,11 @@ int verifier_run_transparent(verifier_ctx_t *ctx) {
         /* Build the full SDI-12 command */
         char cmd[136];
 
+        /* SDI-12 commands must end with '!' — append it if missing */
+        const char *bang = "";
         if (input[len - 1] != '!') {
-            /* Not a valid SDI-12 command — try appending '!' */
-            printf("  -- warning: command should end with '!'\n");
+            printf("  -- appending missing '!'\n");
+            bang = "!";
         }
 
         /*
@@ -126,9 +128,9 @@ int verifier_run_transparent(verifier_ctx_t *ctx) {
          * treat it as a full command.  Otherwise prepend the default address.
          */
         if (sdi12_valid_address(input[0]) || input[0] == '?') {
-            snprintf(cmd, sizeof(cmd), "%s", input);
+            snprintf(cmd, sizeof(cmd), "%s%s", input, bang);
         } else {
-            snprintf(cmd, sizeof(cmd), "%c%s", ctx->addr, input);
+            snprintf(cmd, sizeof(cmd), "%c%s%s", ctx->addr, input, bang);
         }
 
         /* Send break + command */

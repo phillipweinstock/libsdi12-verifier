@@ -42,12 +42,36 @@ static int posix_open(hal_t *self, const hal_serial_config_t *cfg) {
     /* Save original terminal attributes */
     tcgetattr(p->fd, &p->orig);
 
-    /* Configure: 1200 baud, 7 data bits, even parity, 1 stop bit */
+    /* Configure from cfg (SDI-12 default: 1200 baud, 7E1) */
+    speed_t speed;
+    switch (cfg->baud) {
+        case 300:    speed = B300;    break;
+        case 600:    speed = B600;    break;
+        case 2400:   speed = B2400;   break;
+        case 4800:   speed = B4800;   break;
+        case 9600:   speed = B9600;   break;
+        case 19200:  speed = B19200;  break;
+        case 38400:  speed = B38400;  break;
+        case 57600:  speed = B57600;  break;
+        case 115200: speed = B115200; break;
+        case 1200:
+        default:     speed = B1200;   break;
+    }
+
     struct termios tio;
     memset(&tio, 0, sizeof(tio));
 
-    tio.c_cflag = B1200 | CS7 | PARENB | CREAD | CLOCAL;
-    tio.c_iflag = INPCK;    /* enable parity checking on input */
+    tio.c_cflag = CREAD | CLOCAL;
+    tio.c_cflag |= (cfg->data_bits == 8) ? CS8 : CS7;
+    if (cfg->parity != 0) {
+        tio.c_cflag |= PARENB;
+        if (cfg->parity == 1) tio.c_cflag |= PARODD;
+    }
+    if (cfg->stop_bits == 2) tio.c_cflag |= CSTOPB;
+    cfsetispeed(&tio, speed);
+    cfsetospeed(&tio, speed);
+
+    tio.c_iflag = (cfg->parity != 0) ? INPCK : 0; /* parity check on input */
     tio.c_oflag = 0;
     tio.c_lflag = 0;        /* raw mode */
     tio.c_cc[VMIN]  = 0;

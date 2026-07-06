@@ -144,7 +144,11 @@ static uint64_t win32_micros(hal_t *self) {
     win32_priv_t *p = (win32_priv_t *)self->priv;
     LARGE_INTEGER count;
     QueryPerformanceCounter(&count);
-    return (uint64_t)(count.QuadPart * 1000000 / p->freq.QuadPart);
+    /* Divide before multiplying: ticks * 1e6 overflows int64 after
+       ~10 days of uptime at a 10 MHz QPC frequency. */
+    uint64_t ticks = (uint64_t)count.QuadPart;
+    uint64_t freq  = (uint64_t)p->freq.QuadPart;
+    return (ticks / freq) * 1000000ULL + (ticks % freq) * 1000000ULL / freq;
 }
 
 static void win32_delay_ms(hal_t *self, uint32_t ms) {
