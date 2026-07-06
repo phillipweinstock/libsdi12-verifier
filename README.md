@@ -53,37 +53,37 @@ The verifier acts as the data recorder, sends commands, and validates every aspe
 
 | # | Key | Test | Command | Spec | What It Checks |
 |---|-----|------|---------|------|----------------|
-| 1 | `acknowledge` | Acknowledge | `a!` | §4.4.2 | Sensor responds with `a\r\n` |
-| 2 | `query_address` | Query Address | `?!` | §4.4.1 | Returns correct address |
-| 3 | `identify` | Identify | `aI!` | §4.4.3 | Valid vendor/model/firmware/serial fields |
-| 4 | `identify_ver` | Identify Version | `aI!` | §4.4.3 | SDI-12 version field (`ll`) is "13" or "14" |
+| 1 | `acknowledge` | Acknowledge | `a!` | §4.4.1 | Sensor responds with `a\r\n` |
+| 2 | `query_address` | Query Address | `?!` | §4.4.3 | Returns correct address |
+| 3 | `identify` | Identify | `aI!` | §4.4.2 | Valid vendor/model/firmware/serial fields |
+| 4 | `identify_ver` | Identify Version | `aI!` | §4.4.2 | SDI-12 version field (`ll`) is "13" or "14" |
 | 5 | `wrong_addr` | Wrong Address Silence | `x!` | §4.3 | No response to wrong address |
-| 6 | `response_time` | Response Timing | `a!` | §4.2.3 | Response within 15 ms |
-| 7 | `interchar_gap` | Inter-Character Gap | `aI!` | §4.2.4 | Max gap ≤ 1.66 ms between response chars |
-| 8 | `meas_m` | Standard Measurement | `aM!` | §4.4.6 | Valid `atttn` response format |
+| 6 | `response_time` | Response Timing | `a!` | §4.0 | Response within 15 ms |
+| 7 | `interchar_gap` | Inter-Character Gap | `aI!` | §4.0 | Max gap ≤ 1.66 ms between response chars |
+| 8 | `meas_m` | Standard Measurement | `aM!` | §4.4.5 | Valid `atttn` response format |
 | 9 | `meas_mc` | CRC Measurement | `aMC!` | §4.4.12 | CRC-16-IBM verified on data response |
-| 10 | `meas_c` | Concurrent Measurement | `aC!` | §4.4.8 | Valid `atttnn` response format |
-| 11 | `meas_cc` | Concurrent + CRC | `aCC!` | §4.4.8/12 | CRC verified on concurrent data |
+| 10 | `meas_c` | Concurrent Measurement | `aC!` | §4.4.7 | Valid `atttnn` response format |
+| 11 | `meas_cc` | Concurrent + CRC | `aCC!` | §4.4.7/12 | CRC verified on concurrent data |
 | 12 | `service_req` | Service Request Timing | `aM!` | §4.4.6 | Service request within `ttt` seconds |
-| 13 | `data_d0` | Data Retrieval | `aD0!` | §4.4.7 | All declared values retrievable |
-| 14 | `data_retain` | Data Retention | `aD0!` ×2 | §4.4.7 | Data persists across multiple reads |
-| 15 | `continuous` | Continuous Measurement | `aR0!` | §4.4.9 | Immediate data response |
-| 16 | `continuous_crc` | Continuous + CRC | `aRC0!` | §4.4.9/12 | CRC verified on continuous data |
-| 17 | `verify` | Verification | `aV!` | §4.4.10 | Self-check command accepted |
+| 13 | `data_d0` | Data Retrieval | `aD0!` | §4.4.8 | All declared values retrievable |
+| 14 | `data_retain` | Data Retention | `aD0!` ×2 | §4.4.8 | Data persists across multiple reads |
+| 15 | `continuous` | Continuous Measurement | `aR0!` | §4.4.8.1 | Immediate data response |
+| 16 | `continuous_crc` | Continuous + CRC | `aRC0!` | §4.4.8.1/12 | CRC verified on continuous data |
+| 17 | `verify` | Verification | `aV!` | §4.4.11 | Self-check command accepted |
 | 18 | `addr_change` | Address Change | `aAb!` | §4.4.4 | Change + restore roundtrip |
-| 19 | `break_abort` | Break Abort | break | §4.2.1 | Measurement aborted by break signal |
-| 20 | `extended` | Extended Command | `aX!` | §4.4.11 | Extended command response |
-| 21 | `extended_ml` | Extended Multi-Line | `aX!` | §4.4.11 | Multi-line extended response handling |
-| 22 | `meas_groups` | Measurement Groups | `aM1!`–`aM9!` | §4.4.6 | Additional measurement groups |
-| 23 | `conc_groups` | Concurrent Groups | `aC1!`–`aC9!` | §4.4.8 | Additional concurrent groups |
-| 24 | `cont_groups` | Continuous Groups | `aR1!`–`aR9!` | §4.4.9 | Additional continuous groups |
-| 25 | `bus_scan` | Full Bus Scan | `0!`–`z!` | §4.4.1 | All 62 addresses scanned |
+| 19 | `break_abort` | Break Abort | break | §4.4.5.1 | Measurement aborted by break signal |
+| 20 | `extended` | Extended Command | `aX!` | §4.4.13 | Extended command response |
+| 21 | `extended_ml` | Extended Multi-Line | `aX!` | §4.4.13.1 | Multi-line extended response handling |
+| 22 | `meas_groups` | Measurement Groups | `aM1!`–`aM9!` | §4.4.9 | Additional measurement groups |
+| 23 | `conc_groups` | Concurrent Groups | `aC1!`–`aC9!` | §4.4.10 | Additional concurrent groups |
+| 24 | `cont_groups` | Continuous Groups | `aR1!`–`aR9!` | §4.4.8.1 | Additional continuous groups |
+| 25 | `bus_scan` | Full Bus Scan | `0!`–`z!` | §4.3 | All 62 addresses scanned |
 | 26 | `resp_compliance` | Response Compliance | various | §4.3/4.4 | Response format, addressing, terminator |
-| 27 | `hv_ascii` | High-Volume ASCII | `aHA!` | §4.4.13 | HV ASCII measurement + data pages |
-| 28 | `hv_ascii_crc` | High-Volume ASCII + CRC | `aHAC!` | §4.4.13/12 | CRC verified on HV ASCII data |
-| 29 | `hv_binary` | High-Volume Binary | `aHB!` | §4.4.14 | HV binary type/length/payload decode |
-| 30 | `hv_binary_crc` | High-Volume Binary + CRC | `aHBC!` | §4.4.14/12 | CRC verified on raw HV binary response |
-| 31 | `identify_meas` | Identify Measurement | `aIM!` | §4.4.15 | Measurement metadata listing |
+| 27 | `hv_ascii` | High-Volume ASCII | `aHA!` | §5.1 | HV ASCII measurement + data pages |
+| 28 | `hv_ascii_crc` | High-Volume ASCII + CRC | `aHAC!` | §5.1/4.4.12 | CRC verified on HV ASCII data |
+| 29 | `hv_binary` | High-Volume Binary | `aHB!` | §5.2 | aDBn! binary packet framing, type/length/payload decode |
+| 30 | `hv_binary_crc` | High-Volume Binary + CRC | `aHBC!` | §5.2 | 16-bit binary CRC verified on every packet |
+| 31 | `identify_meas` | Identify Measurement | `aIM!` | §6.1 | Measurement metadata listing |
 
 ## Recorder Compliance Tests (16)
 
@@ -91,22 +91,22 @@ The verifier acts as a simulated SDI-12 sensor. It responds correctly to command
 
 | # | Key | Test | Spec | What It Checks |
 |---|-----|------|------|----------------|
-| 1 | `rec_break` | Break Duration | §4.2.1 | Break signal ≥ 12 ms |
-| 2 | `rec_marking` | Marking After Break | §4.2.1 | Marking interval ≥ 8.33 ms |
-| 3 | `rec_cmd_fmt` | Command Format | §4.3 | Valid address + command + terminator |
+| 1 | `rec_break` | Break Duration | §4.0 | Break signal ≥ 12 ms |
+| 2 | `rec_marking` | Marking After Break | §4.0 | Marking interval ≥ 8.33 ms |
+| 3 | `rec_cmd_fmt` | Command Format | §4.4 | Valid address + command + terminator |
 | 4 | `rec_address` | Correct Address | §4.3 | Commands addressed to the target sensor |
-| 5 | `rec_ack` | Acknowledge Handling | §4.4.2 | Recorder sends `a!` and accepts response |
-| 6 | `rec_identify` | Identify Command | §4.4.3 | Recorder sends `aI!` and parses response |
-| 7 | `rec_sequence` | M → D Sequence | §4.4.6 | Correct `aM!` → wait → `aD0!` flow |
-| 8 | `rec_interchar` | Command Inter-Char Gap | §4.2.4 | Gap between command characters |
-| 9 | `rec_brk_between` | Break Between Commands | §4.2.1 | Break signal between successive commands |
+| 5 | `rec_ack` | Acknowledge Handling | §4.4.1 | Recorder sends `a!` and accepts response |
+| 6 | `rec_identify` | Identify Command | §4.4.2 | Recorder sends `aI!` and parses response |
+| 7 | `rec_sequence` | M → D Sequence | §4.4.5 | Correct `aM!` → wait → `aD0!` flow |
+| 8 | `rec_interchar` | Command Inter-Char Gap | §4.0 | Gap between command characters |
+| 9 | `rec_brk_between` | Break Between Commands | §4.0 | Break signal between successive commands |
 | 10 | `rec_svc_req` | Service Request Handling | §4.4.6 | Recorder waits for and responds to service request |
-| 11 | `rec_concurrent` | Concurrent Measurement | §4.4.9 | Recorder sends `aC!` + `aD0!` sequence |
-| 12 | `rec_crc` | CRC Measurement | §4.4.7 | Recorder handles CRC variants (MC/CC) |
-| 13 | `rec_continuous` | Continuous Measurement | §4.4.10 | Recorder sends `aR0!` for immediate data |
+| 11 | `rec_concurrent` | Concurrent Measurement | §4.4.7 | Recorder sends `aC!` + `aD0!` sequence |
+| 12 | `rec_crc` | CRC Measurement | §4.4.12 | Recorder handles CRC variants (MC/CC) |
+| 13 | `rec_continuous` | Continuous Measurement | §4.4.8.1 | Recorder sends `aR0!` for immediate data |
 | 14 | `rec_addr_change` | Address Change | §4.4.4 | Recorder sends `aAb!` to change sensor address |
-| 15 | `rec_verify` | Verification Command | §4.4.10 | Recorder sends `aV!` for self-check |
-| 16 | `rec_extended` | Extended Command | §4.4.11 | Recorder sends `aX...!` extended command |
+| 15 | `rec_verify` | Verification Command | §4.4.11 | Recorder sends `aV!` for self-check |
+| 16 | `rec_extended` | Extended Command | §4.4.13 | Recorder sends `aX...!` extended command |
 
 ## Example Output
 
@@ -217,6 +217,11 @@ libsdi12 together in-memory. Every command the master sends is processed by a
 virtual sensor (address `'0'`, vendor `LOOPBAK`, model `SELFTS`) and the
 response is fed straight back — all in the same process.
 
+The simulated sensor serves **nine values**, deliberately more than fit in a
+single 35-character `aM!` data response — so the self-test exercises
+multi-page `aD0!`/`aD1!` pagination, multi-packet `aDBn!` binary transfers,
+and per-page CRC, not just the happy path.
+
 The loopback sensor supports all 31 sensor tests:
 
 | Result | Count | Notes |
@@ -240,6 +245,8 @@ libsdi12's sensor implementation:
 | `send_response()` used `strlen()` on binary payloads, truncating at embedded null bytes | §5.2 (HV binary packet) | Added `resp_len` field; use explicit length when set |
 | `sdi12_crc_append()` used `strlen()` — same truncation for binary CRC | §4.4.12 (CRC computation) | Added `sdi12_crc_append_n()` with explicit length |
 | HV dispatch always passed `crc=true` for both `aHA!` and `aHB!` | §5.1/5.2 | Fixed to detect `'C'` suffix (`aHAC!`/`aHBC!`) |
+| D-page pagination lost all data when values spanned more than one page — `aD0!` returned empty, `aD1!`+ always empty | §4.4.8 | Page boundaries now tracked for all values; loopback sim enlarged to 9 values so the self-test covers pagination |
+| Master `get_data()`/`continuous()` never actually verified the CRC it claimed to check | §4.4.12 | CRC now verified over the raw response; corrupt data returns `SDI12_ERR_CRC_MISMATCH` |
 
 ## SDI-12 v1.4 Spec Cross-Reference
 
@@ -254,21 +261,13 @@ Key points verified:
 | CRC scope | §4.4.12.1 | ✅ Address through last data char (before CR) |
 | HV ASCII: CRC mandatory | §5.1 | ✅ Tested via `aHA!` / `aHAC!` |
 | HV binary data types | §5.2.1 Table 16 | ✅ All 10 types (int8–uint64, float32/64) |
-| HV binary packet format | §5.2 Table 14 | ⚠️ Spec uses `aDBn!` + binary CRC (2 bytes); library uses `aDn!` + ASCII CRC (3 chars) — simplified |
+| HV binary packet format | §5.2 Table 14 | ✅ Native `aDBn!` framing: addr + 16-bit size + type + payload + 16-bit binary CRC |
 | Response timing ≤15 ms | §4.2.3 | ✅ |
 | Inter-character gap ≤1.66 ms | §4.2.4 | ✅ |
 | Break ≥12 ms | §4.2.1 | ✅ |
 | Marking after break ≥8.33 ms | §4.2.1 | ✅ |
 | Service request format | §4.4.6 | ✅ |
 | Metadata commands | §6.0–6.2 | ✅ `aIM!`, `aIM_nnn!` |
-
-> **Note on HV binary**: The SDI-12 v1.4 spec (§5.2) defines binary data
-> retrieval via `aDBn!` commands with a structured packet format (address +
-> 16-bit packet size + 8-bit type + payload + 16-bit binary CRC). The current
-> library implementation uses the simpler `aDn!` command with ASCII CRC for
-> both HV ASCII and HV binary modes. This is sufficient for functional testing
-> but does not exercise the full spec-defined binary packet framing. A future
-> version may add native `aDBn!` support.
 
 ## Building from Source
 
@@ -314,7 +313,7 @@ make
 - [x] High-volume measurement tests (ASCII + binary, with CRC)
 - [x] Service request and concurrent measurement tests
 - [x] Self-test via loopback (no hardware required)
-- [ ] Native `aDBn!` binary packet framing per §5.2
+- [x] Native `aDBn!` binary packet framing per §5.2
 - [ ] GUI frontend (ImGui / Tauri)
 - [ ] Automated CI with simulated sensors
 - [ ] Hardware-in-the-loop test mode

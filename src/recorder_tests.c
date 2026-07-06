@@ -375,7 +375,7 @@ static int sim_init(rec_sim_t *s, timing_ctx_t *timing_ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_break(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Break Duration (>=12ms)", "\xc2\xa7" "4.2.1");
+    test_result_t r = TEST_RESULT("Break Duration (>=12ms)", "\xc2\xa7" "4.0");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -420,7 +420,7 @@ static test_result_t test_rec_break(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_marking(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Marking After Break (>=8.33ms)", "\xc2\xa7" "4.2.1");
+    test_result_t r = TEST_RESULT("Marking After Break (>=8.33ms)", "\xc2\xa7" "4.0");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -470,7 +470,7 @@ static test_result_t test_rec_marking(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_cmd_format(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Command Format Validation", "\xc2\xa7" "4.3");
+    test_result_t r = TEST_RESULT("Command Format Validation", "\xc2\xa7" "4.4");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -566,7 +566,7 @@ static test_result_t test_rec_address(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_sequence(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("M -> D Measurement Sequence", "\xc2\xa7" "4.4.6");
+    test_result_t r = TEST_RESULT("M -> D Measurement Sequence", "\xc2\xa7" "4.4.5");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -623,7 +623,7 @@ static test_result_t test_rec_sequence(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_interchar(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Command Inter-Character Gap", "\xc2\xa7" "4.2.4");
+    test_result_t r = TEST_RESULT("Command Inter-Character Gap", "\xc2\xa7" "4.0");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -677,7 +677,7 @@ static test_result_t test_rec_interchar(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_ack(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Acknowledge Handling (a!)", "\xc2\xa7" "4.4.2");
+    test_result_t r = TEST_RESULT("Acknowledge Handling (a!)", "\xc2\xa7" "4.4.1");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -732,7 +732,7 @@ static test_result_t test_rec_ack(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_identify(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Identify Command (aI!)", "\xc2\xa7" "4.4.3");
+    test_result_t r = TEST_RESULT("Identify Command (aI!)", "\xc2\xa7" "4.4.2");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -779,7 +779,7 @@ static test_result_t test_rec_identify(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_break_between(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Break Between Commands", "\xc2\xa7" "4.2.1");
+    test_result_t r = TEST_RESULT("Break Between Commands", "\xc2\xa7" "4.0");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -899,7 +899,7 @@ static test_result_t test_rec_service_req(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_concurrent(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Concurrent Measurement (C)", "\xc2\xa7" "4.4.9");
+    test_result_t r = TEST_RESULT("Concurrent Measurement (C)", "\xc2\xa7" "4.4.7");
 
     /* ttt=0 for concurrent — data available immediately */
     if (sim_init(&g_sim, ctx, addr) != 0) {
@@ -972,7 +972,7 @@ static test_result_t test_rec_concurrent(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_crc(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("CRC Measurement (MC/CC)", "\xc2\xa7" "4.4.7");
+    test_result_t r = TEST_RESULT("CRC Measurement (MC/CC)", "\xc2\xa7" "4.4.12");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -1044,7 +1044,7 @@ static test_result_t test_rec_crc(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_continuous(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Continuous Measurement (R)", "\xc2\xa7" "4.4.10");
+    test_result_t r = TEST_RESULT("Continuous Measurement (R)", "\xc2\xa7" "4.4.8.1");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -1154,7 +1154,7 @@ static test_result_t test_rec_addr_change(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_verify(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Verification Command (aV!)", "\xc2\xa7" "4.4.10");
+    test_result_t r = TEST_RESULT("Verification Command (aV!)", "\xc2\xa7" "4.4.11");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -1202,7 +1202,7 @@ static test_result_t test_rec_verify(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_rec_extended(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Extended Command (aX!)", "\xc2\xa7" "4.4.11");
+    test_result_t r = TEST_RESULT("Extended Command (aX!)", "\xc2\xa7" "4.4.13");
 
     if (sim_init(&g_sim, ctx, addr) != 0) {
         TEST_ERROR_MSG(r, "Failed to initialize simulated sensor");
@@ -1247,20 +1247,20 @@ static test_result_t test_rec_extended(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 void recorder_tests_register(test_suite_t *suite) {
-    test_suite_add(suite, "rec_break",       "Break Duration (>=12ms)",         "\xc2\xa7" "4.2.1",    test_rec_break);
-    test_suite_add(suite, "rec_marking",     "Marking After Break (>=8.33ms)",  "\xc2\xa7" "4.2.1",    test_rec_marking);
-    test_suite_add(suite, "rec_cmd_fmt",     "Command Format Validation",       "\xc2\xa7" "4.3",      test_rec_cmd_format);
+    test_suite_add(suite, "rec_break",       "Break Duration (>=12ms)",         "\xc2\xa7" "4.0",    test_rec_break);
+    test_suite_add(suite, "rec_marking",     "Marking After Break (>=8.33ms)",  "\xc2\xa7" "4.0",    test_rec_marking);
+    test_suite_add(suite, "rec_cmd_fmt",     "Command Format Validation",       "\xc2\xa7" "4.4",      test_rec_cmd_format);
     test_suite_add(suite, "rec_address",     "Correct Address in Commands",     "\xc2\xa7" "4.3",      test_rec_address);
-    test_suite_add(suite, "rec_ack",         "Acknowledge Handling (a!)",       "\xc2\xa7" "4.4.2",    test_rec_ack);
-    test_suite_add(suite, "rec_identify",    "Identify Command (aI!)",          "\xc2\xa7" "4.4.3",    test_rec_identify);
-    test_suite_add(suite, "rec_sequence",    "M -> D Measurement Sequence",     "\xc2\xa7" "4.4.6",    test_rec_sequence);
-    test_suite_add(suite, "rec_interchar",   "Command Inter-Character Gap",     "\xc2\xa7" "4.2.4",    test_rec_interchar);
-    test_suite_add(suite, "rec_brk_between", "Break Between Commands",          "\xc2\xa7" "4.2.1",    test_rec_break_between);
+    test_suite_add(suite, "rec_ack",         "Acknowledge Handling (a!)",       "\xc2\xa7" "4.4.1",    test_rec_ack);
+    test_suite_add(suite, "rec_identify",    "Identify Command (aI!)",          "\xc2\xa7" "4.4.2",    test_rec_identify);
+    test_suite_add(suite, "rec_sequence",    "M -> D Measurement Sequence",     "\xc2\xa7" "4.4.5",    test_rec_sequence);
+    test_suite_add(suite, "rec_interchar",   "Command Inter-Character Gap",     "\xc2\xa7" "4.0",    test_rec_interchar);
+    test_suite_add(suite, "rec_brk_between", "Break Between Commands",          "\xc2\xa7" "4.0",    test_rec_break_between);
     test_suite_add(suite, "rec_svc_req",     "Service Request Handling",        "\xc2\xa7" "4.4.6",    test_rec_service_req);
-    test_suite_add(suite, "rec_concurrent",  "Concurrent Measurement (C)",      "\xc2\xa7" "4.4.9",    test_rec_concurrent);
-    test_suite_add(suite, "rec_crc",         "CRC Measurement (MC/CC)",         "\xc2\xa7" "4.4.7",    test_rec_crc);
-    test_suite_add(suite, "rec_continuous",  "Continuous Measurement (R)",       "\xc2\xa7" "4.4.10",   test_rec_continuous);
+    test_suite_add(suite, "rec_concurrent",  "Concurrent Measurement (C)",      "\xc2\xa7" "4.4.7",    test_rec_concurrent);
+    test_suite_add(suite, "rec_crc",         "CRC Measurement (MC/CC)",         "\xc2\xa7" "4.4.12",    test_rec_crc);
+    test_suite_add(suite, "rec_continuous",  "Continuous Measurement (R)",       "\xc2\xa7" "4.4.8.1",   test_rec_continuous);
     test_suite_add(suite, "rec_addr_change", "Address Change (aAb!)",           "\xc2\xa7" "4.4.4",    test_rec_addr_change);
-    test_suite_add(suite, "rec_verify",      "Verification Command (aV!)",      "\xc2\xa7" "4.4.10",   test_rec_verify);
-    test_suite_add(suite, "rec_extended",    "Extended Command (aX!)",          "\xc2\xa7" "4.4.11",   test_rec_extended);
+    test_suite_add(suite, "rec_verify",      "Verification Command (aV!)",      "\xc2\xa7" "4.4.11",   test_rec_verify);
+    test_suite_add(suite, "rec_extended",    "Extended Command (aX!)",          "\xc2\xa7" "4.4.13",   test_rec_extended);
 }

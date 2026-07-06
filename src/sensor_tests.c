@@ -53,7 +53,7 @@ static void append_str(char *buf, size_t bufsize, size_t *pos,
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_acknowledge(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Acknowledge (a!)", "\xc2\xa7" "4.4.2");
+    test_result_t r = TEST_RESULT("Acknowledge (a!)", "\xc2\xa7" "4.4.1");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -88,7 +88,7 @@ static test_result_t test_acknowledge(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_query_address(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Query Address (?!)", "\xc2\xa7" "4.4.1");
+    test_result_t r = TEST_RESULT("Query Address (?!)", "\xc2\xa7" "4.4.3");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -121,7 +121,7 @@ static test_result_t test_query_address(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_identify(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Identify (aI!)", "\xc2\xa7" "4.4.3");
+    test_result_t r = TEST_RESULT("Identify (aI!)", "\xc2\xa7" "4.4.2");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -197,7 +197,7 @@ static test_result_t test_wrong_address_silence(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_response_timing(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Response Timing (<=15ms)", "\xc2\xa7" "4.2.3");
+    test_result_t r = TEST_RESULT("Response Timing (<=15ms)", "\xc2\xa7" "4.0");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -228,7 +228,7 @@ static test_result_t test_response_timing(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_interchar_gap(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Inter-Character Gap (<=1.66ms)", "\xc2\xa7" "4.2.4");
+    test_result_t r = TEST_RESULT("Inter-Character Gap (<=1.66ms)", "\xc2\xa7" "4.0");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -261,7 +261,7 @@ static test_result_t test_interchar_gap(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_measurement_m(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Standard Measurement (aM!)", "\xc2\xa7" "4.4.6");
+    test_result_t r = TEST_RESULT("Standard Measurement (aM!)", "\xc2\xa7" "4.4.5");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -348,7 +348,7 @@ static test_result_t test_measurement_crc(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_measurement_c(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Concurrent Measurement (aC!)", "\xc2\xa7" "4.4.8");
+    test_result_t r = TEST_RESULT("Concurrent Measurement (aC!)", "\xc2\xa7" "4.4.7");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -384,7 +384,7 @@ static test_result_t test_measurement_c(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_measurement_cc(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Concurrent + CRC (aCC!)", "\xc2\xa7" "4.4.8/12");
+    test_result_t r = TEST_RESULT("Concurrent + CRC (aCC!)", "\xc2\xa7" "4.4.7/12");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -480,7 +480,7 @@ static test_result_t test_service_request(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_data_retrieval(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Data Retrieval (aD0!)", "\xc2\xa7" "4.4.7");
+    test_result_t r = TEST_RESULT("Data Retrieval (aD0!)", "\xc2\xa7" "4.4.8");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -535,7 +535,7 @@ static test_result_t test_data_retrieval(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_data_retention(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Data Retention", "\xc2\xa7" "4.4.7");
+    test_result_t r = TEST_RESULT("Data Retention", "\xc2\xa7" "4.4.8");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -586,7 +586,7 @@ static test_result_t test_data_retention(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_continuous(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Continuous Measurement (aR0!)", "\xc2\xa7" "4.4.9");
+    test_result_t r = TEST_RESULT("Continuous Measurement (aR0!)", "\xc2\xa7" "4.4.8.1");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -615,7 +615,7 @@ static test_result_t test_continuous(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_continuous_crc(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Continuous + CRC (aRC0!)", "\xc2\xa7" "4.4.9/12");
+    test_result_t r = TEST_RESULT("Continuous + CRC (aRC0!)", "\xc2\xa7" "4.4.8.1/12");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -645,7 +645,7 @@ static test_result_t test_continuous_crc(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_verify(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Verification (aV!)", "\xc2\xa7" "4.4.10");
+    test_result_t r = TEST_RESULT("Verification (aV!)", "\xc2\xa7" "4.4.11");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -726,7 +726,7 @@ static test_result_t test_address_change(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_break_abort(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Break Aborts Measurement", "\xc2\xa7" "4.2.1");
+    test_result_t r = TEST_RESULT("Break Aborts Measurement", "\xc2\xa7" "4.4.5.1");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -761,7 +761,7 @@ static test_result_t test_break_abort(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_extended(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Extended Command (aX!)", "\xc2\xa7" "4.4.11");
+    test_result_t r = TEST_RESULT("Extended Command (aX!)", "\xc2\xa7" "4.4.13");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -789,7 +789,7 @@ static test_result_t test_extended(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_measurement_groups(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Measurement Groups (aM1-M9)", "\xc2\xa7" "4.4.6");
+    test_result_t r = TEST_RESULT("Measurement Groups (aM1-M9)", "\xc2\xa7" "4.4.9");
 
     int  supported = 0;
     char groups[16];
@@ -824,7 +824,7 @@ static test_result_t test_measurement_groups(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_bus_scan(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Full Bus Scan (62 addresses)", "\xc2\xa7" "4.4.1");
+    test_result_t r = TEST_RESULT("Full Bus Scan (62 addresses)", "\xc2\xa7" "4.3");
     (void)addr;
 
     static const char addrs[] =
@@ -1080,7 +1080,7 @@ static bool hv_ascii_cycle(timing_ctx_t *ctx, char addr, bool crc,
 }
 
 static test_result_t test_hv_ascii(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("High-Volume ASCII (aHA!)", "\xc2\xa7" "4.4.13");
+    test_result_t r = TEST_RESULT("High-Volume ASCII (aHA!)", "\xc2\xa7" "5.1");
     hv_ascii_cycle(ctx, addr, false, &r);
     return r;
 }
@@ -1091,7 +1091,7 @@ static test_result_t test_hv_ascii(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_hv_ascii_crc(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("High-Volume ASCII + CRC (aHAC!)", "\xc2\xa7" "4.4.13/12");
+    test_result_t r = TEST_RESULT("High-Volume ASCII + CRC (aHAC!)", "\xc2\xa7" "5.1/4.4.12");
     hv_ascii_cycle(ctx, addr, true, &r);
     return r;
 }
@@ -1234,7 +1234,7 @@ static test_result_t test_hv_binary(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_identify_measurement(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Identify Measurement (aIM!)", "\xc2\xa7" "4.4.15");
+    test_result_t r = TEST_RESULT("Identify Measurement (aIM!)", "\xc2\xa7" "6.1");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -1309,7 +1309,7 @@ static test_result_t test_identify_measurement(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_extended_multiline(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Extended Multi-Line (aX!)", "\xc2\xa7" "4.4.11");
+    test_result_t r = TEST_RESULT("Extended Multi-Line (aX!)", "\xc2\xa7" "4.4.13.1");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -1362,7 +1362,7 @@ static test_result_t test_extended_multiline(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_identify_version(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Identify Version Field (ll)", "\xc2\xa7" "4.4.3");
+    test_result_t r = TEST_RESULT("Identify Version Field (ll)", "\xc2\xa7" "4.4.2");
 
     sdi12_master_send_break(timing_master(ctx));
 
@@ -1409,7 +1409,7 @@ static test_result_t test_identify_version(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_concurrent_groups(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Concurrent Groups (aC1-C9)", "\xc2\xa7" "4.4.8");
+    test_result_t r = TEST_RESULT("Concurrent Groups (aC1-C9)", "\xc2\xa7" "4.4.10");
 
     int  supported = 0;
     char groups[16];
@@ -1444,7 +1444,7 @@ static test_result_t test_concurrent_groups(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_continuous_groups(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("Continuous Groups (aR1-R9)", "\xc2\xa7" "4.4.9");
+    test_result_t r = TEST_RESULT("Continuous Groups (aR1-R9)", "\xc2\xa7" "4.4.8.1");
 
     int  supported = 0;
     char groups[16];
@@ -1489,35 +1489,35 @@ static test_result_t test_hv_binary_crc(timing_ctx_t *ctx, char addr) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 void sensor_tests_register(test_suite_t *suite) {
-    test_suite_add(suite, "acknowledge",    "Acknowledge (a!)",                "\xc2\xa7" "4.4.2",    test_acknowledge);
-    test_suite_add(suite, "query_address",  "Query Address (?!)",              "\xc2\xa7" "4.4.1",    test_query_address);
-    test_suite_add(suite, "identify",       "Identify (aI!)",                  "\xc2\xa7" "4.4.3",    test_identify);
-    test_suite_add(suite, "identify_ver",   "Identify Version Field (ll)",     "\xc2\xa7" "4.4.3",    test_identify_version);
+    test_suite_add(suite, "acknowledge",    "Acknowledge (a!)",                "\xc2\xa7" "4.4.1",    test_acknowledge);
+    test_suite_add(suite, "query_address",  "Query Address (?!)",              "\xc2\xa7" "4.4.3",    test_query_address);
+    test_suite_add(suite, "identify",       "Identify (aI!)",                  "\xc2\xa7" "4.4.2",    test_identify);
+    test_suite_add(suite, "identify_ver",   "Identify Version Field (ll)",     "\xc2\xa7" "4.4.2",    test_identify_version);
     test_suite_add(suite, "wrong_addr",     "Wrong Address Silence",           "\xc2\xa7" "4.3",      test_wrong_address_silence);
-    test_suite_add(suite, "response_time",  "Response Timing (<=15ms)",        "\xc2\xa7" "4.2.3",    test_response_timing);
-    test_suite_add(suite, "interchar_gap",  "Inter-Character Gap (<=1.66ms)",  "\xc2\xa7" "4.2.4",    test_interchar_gap);
-    test_suite_add(suite, "meas_m",         "Standard Measurement (aM!)",      "\xc2\xa7" "4.4.6",    test_measurement_m);
+    test_suite_add(suite, "response_time",  "Response Timing (<=15ms)",        "\xc2\xa7" "4.0",    test_response_timing);
+    test_suite_add(suite, "interchar_gap",  "Inter-Character Gap (<=1.66ms)",  "\xc2\xa7" "4.0",    test_interchar_gap);
+    test_suite_add(suite, "meas_m",         "Standard Measurement (aM!)",      "\xc2\xa7" "4.4.5",    test_measurement_m);
     test_suite_add(suite, "meas_mc",        "CRC Measurement (aMC!)",          "\xc2\xa7" "4.4.12",   test_measurement_crc);
-    test_suite_add(suite, "meas_c",         "Concurrent Measurement (aC!)",    "\xc2\xa7" "4.4.8",    test_measurement_c);
-    test_suite_add(suite, "meas_cc",        "Concurrent + CRC (aCC!)",         "\xc2\xa7" "4.4.8/12", test_measurement_cc);
+    test_suite_add(suite, "meas_c",         "Concurrent Measurement (aC!)",    "\xc2\xa7" "4.4.7",    test_measurement_c);
+    test_suite_add(suite, "meas_cc",        "Concurrent + CRC (aCC!)",         "\xc2\xa7" "4.4.7/12", test_measurement_cc);
     test_suite_add(suite, "service_req",    "Service Request Timing",          "\xc2\xa7" "4.4.6",    test_service_request);
-    test_suite_add(suite, "data_d0",        "Data Retrieval (aD0!)",           "\xc2\xa7" "4.4.7",    test_data_retrieval);
-    test_suite_add(suite, "data_retain",    "Data Retention",                  "\xc2\xa7" "4.4.7",    test_data_retention);
-    test_suite_add(suite, "continuous",     "Continuous Measurement (aR0!)",   "\xc2\xa7" "4.4.9",    test_continuous);
-    test_suite_add(suite, "continuous_crc", "Continuous + CRC (aRC0!)",        "\xc2\xa7" "4.4.9/12", test_continuous_crc);
-    test_suite_add(suite, "verify",         "Verification (aV!)",              "\xc2\xa7" "4.4.10",   test_verify);
+    test_suite_add(suite, "data_d0",        "Data Retrieval (aD0!)",           "\xc2\xa7" "4.4.8",    test_data_retrieval);
+    test_suite_add(suite, "data_retain",    "Data Retention",                  "\xc2\xa7" "4.4.8",    test_data_retention);
+    test_suite_add(suite, "continuous",     "Continuous Measurement (aR0!)",   "\xc2\xa7" "4.4.8.1",    test_continuous);
+    test_suite_add(suite, "continuous_crc", "Continuous + CRC (aRC0!)",        "\xc2\xa7" "4.4.8.1/12", test_continuous_crc);
+    test_suite_add(suite, "verify",         "Verification (aV!)",              "\xc2\xa7" "4.4.11",   test_verify);
     test_suite_add(suite, "addr_change",    "Address Change (aAb!)",           "\xc2\xa7" "4.4.4",    test_address_change);
-    test_suite_add(suite, "break_abort",    "Break Aborts Measurement",        "\xc2\xa7" "4.2.1",    test_break_abort);
-    test_suite_add(suite, "extended",       "Extended Command (aX!)",          "\xc2\xa7" "4.4.11",   test_extended);
-    test_suite_add(suite, "extended_ml",    "Extended Multi-Line (aX!)",       "\xc2\xa7" "4.4.11",   test_extended_multiline);
-    test_suite_add(suite, "meas_groups",    "Measurement Groups (aM1-M9)",     "\xc2\xa7" "4.4.6",    test_measurement_groups);
-    test_suite_add(suite, "conc_groups",    "Concurrent Groups (aC1-C9)",      "\xc2\xa7" "4.4.8",    test_concurrent_groups);
-    test_suite_add(suite, "cont_groups",    "Continuous Groups (aR1-R9)",      "\xc2\xa7" "4.4.9",    test_continuous_groups);
-    test_suite_add(suite, "bus_scan",       "Full Bus Scan (62 addresses)",    "\xc2\xa7" "4.4.1",    test_bus_scan);
+    test_suite_add(suite, "break_abort",    "Break Aborts Measurement",        "\xc2\xa7" "4.4.5.1",    test_break_abort);
+    test_suite_add(suite, "extended",       "Extended Command (aX!)",          "\xc2\xa7" "4.4.13",   test_extended);
+    test_suite_add(suite, "extended_ml",    "Extended Multi-Line (aX!)",       "\xc2\xa7" "4.4.13.1",   test_extended_multiline);
+    test_suite_add(suite, "meas_groups",    "Measurement Groups (aM1-M9)",     "\xc2\xa7" "4.4.9",    test_measurement_groups);
+    test_suite_add(suite, "conc_groups",    "Concurrent Groups (aC1-C9)",      "\xc2\xa7" "4.4.10",    test_concurrent_groups);
+    test_suite_add(suite, "cont_groups",    "Continuous Groups (aR1-R9)",      "\xc2\xa7" "4.4.8.1",    test_continuous_groups);
+    test_suite_add(suite, "bus_scan",       "Full Bus Scan (62 addresses)",    "\xc2\xa7" "4.3",    test_bus_scan);
     test_suite_add(suite, "resp_compliance","Response Compliance",             "\xc2\xa7" "4.3/4.4",  test_response_compliance);
-    test_suite_add(suite, "hv_ascii",       "High-Volume ASCII (aHA!)",        "\xc2\xa7" "4.4.13",   test_hv_ascii);
-    test_suite_add(suite, "hv_ascii_crc",   "High-Volume ASCII+CRC (aHAC!)",   "\xc2\xa7" "4.4.13/12",test_hv_ascii_crc);
+    test_suite_add(suite, "hv_ascii",       "High-Volume ASCII (aHA!)",        "\xc2\xa7" "5.1",   test_hv_ascii);
+    test_suite_add(suite, "hv_ascii_crc",   "High-Volume ASCII+CRC (aHAC!)",   "\xc2\xa7" "5.1/4.4.12",test_hv_ascii_crc);
     test_suite_add(suite, "hv_binary",      "High-Volume Binary (aHB!)",       "\xc2\xa7" "5.2",      test_hv_binary);
     test_suite_add(suite, "hv_binary_crc",  "High-Volume Binary+CRC (aHBC!)",  "\xc2\xa7" "5.2",      test_hv_binary_crc);
-    test_suite_add(suite, "identify_meas",  "Identify Measurement (aIM!)",     "\xc2\xa7" "4.4.15",   test_identify_measurement);
+    test_suite_add(suite, "identify_meas",  "Identify Measurement (aIM!)",     "\xc2\xa7" "6.1",   test_identify_measurement);
 }
