@@ -107,6 +107,11 @@ static int parse_args(int argc, char **argv, verifier_ctx_t *ctx) {
         }
         else if (strcmp(argv[i], "--addr") == 0 || strcmp(argv[i], "-a") == 0) {
             if (++i >= argc) { fprintf(stderr, "Error: --addr requires argument\n"); return -1; }
+            if (!sdi12_valid_address(argv[i][0])) {
+                fprintf(stderr, "Error: invalid address '%c' (0-9, A-Z, a-z)\n",
+                        argv[i][0]);
+                return -1;
+            }
             ctx->addr = argv[i][0];
         }
         else if (strcmp(argv[i], "--test") == 0 || strcmp(argv[i], "-t") == 0) {

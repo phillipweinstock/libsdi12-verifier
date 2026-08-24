@@ -71,7 +71,12 @@ static void json_str(FILE *out, const char *s) {
                 case '\n': fputs("\\n", out);  break;
                 case '\r': fputs("\\r", out);  break;
                 case '\t': fputs("\\t", out);  break;
-                default:   fputc(*s, out);     break;
+                default:
+                    if ((unsigned char)*s < 0x20)
+                        fprintf(out, "\\u%04x", (unsigned char)*s);
+                    else
+                        fputc(*s, out);
+                    break;
             }
         }
     }

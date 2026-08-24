@@ -999,12 +999,15 @@ static test_result_t test_rec_crc(timing_ctx_t *ctx, char addr) {
                 g_sim.last_cmd[1] == 'D') {
                 got_d = true;
 
-                /*
-                 * With CRC, the D response has 3 extra CRC chars before
-                 * the \r\n.  A minimal CRC response is: a+val+CCC\r\n
-                 * which is at least 10 chars.
-                 */
-                if (g_sim.last_response_len >= 10)
+                /* Verify the CRC actually checks out rather than just
+                 * counting characters. */
+                size_t rlen = g_sim.last_response_len;
+                while (rlen > 0 &&
+                       (g_sim.last_response[rlen - 1] == '\r' ||
+                        g_sim.last_response[rlen - 1] == '\n'))
+                    rlen--;
+                if (rlen >= 4 &&
+                    sdi12_crc_verify(g_sim.last_response, rlen))
                     crc_in_response = true;
 
                 break;

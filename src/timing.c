@@ -29,6 +29,11 @@ static void cb_send(const char *data, size_t len, void *user_data) {
         t->hal->set_rts(t->hal, false);
 }
 
+/* End-of-response idle window once bytes are flowing: one character
+ * time at 1200 baud (8.33 ms) + the max inter-character marking
+ * (1.66 ms) + scheduling margin. */
+#define TIMING_INTERCHAR_IDLE_US 25000
+
 static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_data) {
     timing_ctx_t *t = (timing_ctx_t *)user_data;
 
@@ -37,15 +42,20 @@ static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_dat
     t->resp_end_us   = 0;
     t->line_count    = 0;
 
+    /* Per the libsdi12 recv contract, timeout_ms bounds the wait for
+     * the FIRST byte only — it is the spec's 15 ms response window,
+     * while a full response needs hundreds of ms of line time at
+     * 1200 baud. Once bytes arrive, keep reading until LF, a full
+     * buffer, or the line going idle. */
     uint64_t deadline = t->hal->micros(t->hal) + (uint64_t)timeout_ms * 1000;
     size_t   pos      = 0;
 
-    while (t->hal->micros(t->hal) < deadline && pos < max) {
+    while (pos < max) {
         char   c;
         size_t n = t->hal->read(t->hal, &c, 1, 1);   /* 1 ms poll */
-        if (n == 1) {
-            uint64_t now = t->hal->micros(t->hal);
+        uint64_t now = t->hal->micros(t->hal);
 
+        if (n == 1) {
             if (pos == 0)
                 t->resp_start_us = now;
 
@@ -55,12 +65,17 @@ static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_dat
             buf[pos++]     = c;
             t->resp_end_us = now;
 
+            /* Response in progress — extend to the inter-char window */
+            deadline = now + TIMING_INTERCHAR_IDLE_US;
+
             if (!t->binary_recv_mode && c == '\n') {
                 /* Record line boundary timestamp */
                 if (t->line_count < TIMING_MAX_LINES)
                     t->line_end_us[t->line_count++] = now;
                 break;
             }
+        } else if (now >= deadline) {
+            break;
         }
     }
 

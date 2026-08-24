@@ -90,11 +90,13 @@ int verifier_run_transparent(verifier_ctx_t *ctx) {
 
         /* Help */
         if (strcmp(input, "help") == 0 || strcmp(input, "?") == 0) {
-            printf("  Commands:\n");
-            printf("    I!            Send aI! (address prepended)\n");
-            printf("    0I!           Send 0I! (full command, as-is)\n");
-            printf("    M!            Send aM! (address prepended)\n");
-            printf("    D0!           Send aD0! (address prepended)\n");
+            printf("  Commands are sent verbatim — the first character is\n");
+            printf("  the sensor address (every letter and digit is a valid\n");
+            printf("  address, so bare bodies can't be detected reliably).\n");
+            printf("  Start a line with '.' to use the default address:\n");
+            printf("    0I!           Send 0I! as-is\n");
+            printf("    .I!           Send aI! (default address prepended)\n");
+            printf("    .M!  .D0!     Likewise aM!, aD0!\n");
             printf("    break         Send break signal only\n");
             printf("    addr <c>      Change default address\n");
             printf("    quit          Exit transparent mode\n\n");
@@ -124,13 +126,15 @@ int verifier_run_transparent(verifier_ctx_t *ctx) {
         }
 
         /*
-         * If the first character is a valid SDI-12 address or '?',
-         * treat it as a full command.  Otherwise prepend the default address.
+         * A leading '.' asks for the default address to be prepended
+         * ('.I!' → 'aI!'). Everything else is sent verbatim — every
+         * letter and digit is a valid SDI-12 address, so a bare command
+         * body cannot be distinguished from an addressed command.
          */
-        if (sdi12_valid_address(input[0]) || input[0] == '?') {
-            snprintf(cmd, sizeof(cmd), "%s%s", input, bang);
+        if (input[0] == '.') {
+            snprintf(cmd, sizeof(cmd), "%c%s%s", ctx->addr, input + 1, bang);
         } else {
-            snprintf(cmd, sizeof(cmd), "%c%s%s", ctx->addr, input, bang);
+            snprintf(cmd, sizeof(cmd), "%s%s", input, bang);
         }
 
         /* Send break + command */
