@@ -23,8 +23,10 @@
 /* ── pd.d value grammar (§4.4.8 Table 11) ─────────────────────────────
  * <values> = pd.d — polarity sign, 1–7 digits, optional single decimal
  * point, max 9 characters total. Anything else (letters, second sign,
- * empty digit run) is malformed on the wire. */
-static bool valid_pdd_value(const char *v, size_t len, char *why, size_t why_sz)
+ * empty digit run) is malformed on the wire.
+ * Exported (sdi12v_*) so the live compliance battery can use the same
+ * validators against real sensors, not just the loopback self-test. */
+bool sdi12v_valid_pdd(const char *v, size_t len, char *why, size_t why_sz)
 {
     if (len < 2) {
         snprintf(why, why_sz, "too short (%zu chars)", len);
@@ -57,14 +59,20 @@ static bool valid_pdd_value(const char *v, size_t len, char *why, size_t why_sz)
         snprintf(why, why_sz, "%d digits exceeds 7-digit max", digits);
         return false;
     }
+    if (v[len - 1] == '.') {
+        /* Table 11: digits follow the decimal point — a bare trailing
+         * point is the signature of a truncated value. */
+        snprintf(why, why_sz, "trailing decimal point");
+        return false;
+    }
     return true;
 }
 
 /* Validate every value in one raw aDn! response (addr already checked).
  * Returns number of values, or -1 with `why` set on grammar violation. */
-static int validate_d_response(const char *resp, size_t len,
-                               char *why, size_t why_sz,
-                               char *bad, size_t bad_sz)
+int sdi12v_validate_values(const char *resp, size_t len,
+                           char *why, size_t why_sz,
+                           char *bad, size_t bad_sz)
 {
     /* Strip trailing CR/LF */
     while (len > 0 && (resp[len - 1] == '\r' || resp[len - 1] == '\n'))
@@ -84,7 +92,7 @@ static int validate_d_response(const char *resp, size_t len,
             i++;
         size_t vlen = i - start;
         char reason[64];
-        if (!valid_pdd_value(resp + start, vlen, reason, sizeof(reason))) {
+        if (!sdi12v_valid_pdd(resp + start, vlen, reason, sizeof(reason))) {
             snprintf(why, why_sz, "%s", reason);
             snprintf(bad, bad_sz, "%.*s", (int)(vlen > 12 ? 12 : vlen),
                      resp + start);
@@ -133,7 +141,7 @@ static test_result_t test_fault_hostile_values(timing_ctx_t *ctx, char addr)
             break;
 
         char why[96], bad[16];
-        int n = validate_d_response(m->resp_buf, m->resp_len,
+        int n = sdi12v_validate_values(m->resp_buf, m->resp_len,
                                     why, sizeof(why), bad, sizeof(bad));
         if (n < 0) {
             hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
@@ -352,6 +360,144 @@ static test_result_t test_fault_paced_uart(timing_ctx_t *ctx, char addr)
     return r;
 }
 
+/* Shared: run aHA! + fetch all aDn! pages, validating grammar and the
+ * 75-char <values> limit; return delivered count (or -1, r set FAILed). */
+static int ha_fetch_all(timing_ctx_t *ctx, char addr,
+                        sdi12_meas_response_t *mresp, test_result_t *r)
+{
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_ASCII, 0, false, mresp);
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(*r, "HA command failed with error %d", err);
+        return -1;
+    }
+
+    int total = 0;
+    for (uint16_t page = 0; page < 1000; page++) {
+        char cmd[8];
+        snprintf(cmd, sizeof(cmd), "%cD%u!", addr, page);
+        err = sdi12_master_transact(timing_master(ctx), cmd,
+                                    SDI12_RESPONSE_TIMEOUT_MS);
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(*r, "D%u! failed with error %d", page, err);
+            return -1;
+        }
+
+        sdi12_master_ctx_t *m = timing_master(ctx);
+        size_t len = m->resp_len;
+        while (len > 0 && (m->resp_buf[len - 1] == '\r' ||
+                           m->resp_buf[len - 1] == '\n'))
+            len--;
+        if (len <= 1)
+            break;                       /* bare address — no more data */
+        if (!sdi12_crc_verify(m->resp_buf, m->resp_len)) {
+            TEST_FAIL_MSG(*r, "D%u! page lacks the mandatory CRC", page);
+            return -1;
+        }
+        size_t vals_len = len - 1 - 3;   /* minus address and CRC */
+        if (vals_len > 75) {
+            TEST_FAIL_MSG(*r, "D%u! <values> field is %zu chars — "
+                          "\xc2\xa7" "4.4.8 caps it at 75", page, vals_len);
+            return -1;
+        }
+
+        char why[96], bad[16];
+        int n = sdi12v_validate_values(m->resp_buf, len - 3,
+                                       why, sizeof(why), bad, sizeof(bad));
+        if (n < 0) {
+            TEST_FAIL_MSG(*r, "D%u! emitted malformed value \"%s\": %s",
+                          page, bad, why);
+            return -1;
+        }
+        if (n == 0)
+            break;
+        total += n;
+    }
+    return total;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  F6. A page landing exactly on the 75-char limit must not lose data
+ *  Exposes: off-by-one page-boundary arithmetic dropping a value
+ * ══════════════════════════════════════════════════════════════════════ */
+static test_result_t test_fault_page_boundary(timing_ctx_t *ctx, char addr)
+{
+    test_result_t r = TEST_RESULT("Exact 75-Char Page Boundary",
+                                  SECT_SELFTEST);
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_BOUNDARY_VALUES);
+
+    sdi12_meas_response_t mresp;
+    int total = ha_fetch_all(ctx, addr, &mresp, &r);
+
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
+    if (total < 0) return r;
+
+    if (total != mresp.value_count) {
+        TEST_FAIL_MSG(r, "HA promised %d values, D pages delivered %d — "
+                      "the value landing on the exact 75-char boundary "
+                      "was silently lost", mresp.value_count, total);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "All %d values delivered across boundary-exact pages",
+                  total);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  F7. Overwide value must be precision-reduced, not truncated
+ *  Exposes: formatter emitting grammar-invalid output like "+9999999."
+ * ══════════════════════════════════════════════════════════════════════ */
+static test_result_t test_fault_overwide_value(timing_ctx_t *ctx, char addr)
+{
+    test_result_t r = TEST_RESULT("Overwide Value Precision Reduction",
+                                  SECT_SELFTEST);
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_OVERWIDE_VALUE);
+
+    sdi12_meas_response_t mresp;
+    int total = ha_fetch_all(ctx, addr, &mresp, &r);
+
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
+    if (total < 0) return r;
+
+    if (total != mresp.value_count) {
+        TEST_FAIL_MSG(r, "HA promised %d values, D pages delivered %d",
+                      mresp.value_count, total);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "7-digit + 6-decimal value formatted grammar-clean");
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  F8. CRC engine matches the spec's own worked examples (§4.4.12.3)
+ *  Breaks the symmetric-implementation blindness for the CRC itself
+ * ══════════════════════════════════════════════════════════════════════ */
+static test_result_t test_fault_crc_vectors(timing_ctx_t *ctx, char addr)
+{
+    (void)ctx; (void)addr;
+    test_result_t r = TEST_RESULT("Spec CRC Worked Examples", SECT_SELFTEST);
+
+    char a[32] = "0+3.14";
+    char b[48] = "0+1.11+2.22+3.33+4.44+5.55+6.66";
+    if (sdi12_crc_append(a, sizeof(a)) != SDI12_OK ||
+        strcmp(a, "0+3.14OqZ\r\n") != 0) {
+        TEST_FAIL_MSG(r, "\"0+3.14\" CRC != OqZ (got \"%.12s\")", a);
+        return r;
+    }
+    if (sdi12_crc_append(b, sizeof(b)) != SDI12_OK ||
+        strcmp(b, "0+1.11+2.22+3.33+4.44+5.55+6.66I]q\r\n") != 0) {
+        TEST_FAIL_MSG(r, "six-value example CRC != I]q");
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "OqZ and I]q reproduce byte-for-byte");
+    return r;
+}
+
 /* ══════════════════════════════════════════════════════════════════════ */
 
 void selftest_fault_tests_register(test_suite_t *suite)
@@ -371,4 +517,13 @@ void selftest_fault_tests_register(test_suite_t *suite)
     test_suite_add(suite, "fault_paced",
                    "Paced-UART Response Delivery", SECT_SELFTEST,
                    test_fault_paced_uart);
+    test_suite_add(suite, "fault_boundary",
+                   "Exact 75-Char Page Boundary", SECT_SELFTEST,
+                   test_fault_page_boundary);
+    test_suite_add(suite, "fault_overwide",
+                   "Overwide Value Precision Reduction", SECT_SELFTEST,
+                   test_fault_overwide_value);
+    test_suite_add(suite, "fault_crc_vectors",
+                   "Spec CRC Worked Examples", SECT_SELFTEST,
+                   test_fault_crc_vectors);
 }

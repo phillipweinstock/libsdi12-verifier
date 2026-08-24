@@ -155,6 +155,24 @@ static sdi12_value_t lb_read_param(uint8_t idx, void *user_data) {
         }
     }
 
+    /* Boundary-values fault: eight 9-char values ("+12345.67") plus one
+     * 3-char value ("+55") = exactly 75 formatted chars, the precise
+     * <values> limit of the 75-char page classes. */
+    if (p->faults & LB_FAULT_BOUNDARY_VALUES) {
+        if (idx < 8) { v.value = 12345.67f; v.decimals = 2; }
+        else         { v.value = 55.0f;     v.decimals = 0; }
+        return v;
+    }
+
+    /* Overwide-value fault: 7 integer digits + 6 requested decimals
+     * cannot fit the 9-char cap — the formatter must reduce precision,
+     * not truncate into grammar-invalid output. */
+    if (p->faults & LB_FAULT_OVERWIDE_VALUE) {
+        if (idx == 0) { v.value = 9999999.0f; v.decimals = 6; return v; }
+        v.value = 1.0f; v.decimals = 0;
+        return v;
+    }
+
     if (idx < LB_PARAM_COUNT) {
         v.value    = LB_VALUES[idx];
         v.decimals = 2;

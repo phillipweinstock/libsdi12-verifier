@@ -61,4 +61,12 @@ void sensor_tests_register(test_suite_t *suite);
 void recorder_tests_register(test_suite_t *suite);
 void selftest_fault_tests_register(test_suite_t *suite); /* --self-test only */
 
+/* Shared response validators (defined in selftest_faults.c, used by the
+ * live compliance battery as well): pd.d value grammar per §4.4.8
+ * Table 11, and whole-<values>-field validation of a raw aDn! response. */
+bool sdi12v_valid_pdd(const char *v, size_t len, char *why, size_t why_sz);
+int  sdi12v_validate_values(const char *resp, size_t len,
+                            char *why, size_t why_sz,
+                            char *bad, size_t bad_sz);
+
 #endif /* VERIFIER_H */

@@ -594,7 +594,7 @@ static test_result_t test_continuous(timing_ctx_t *ctx, char addr) {
     sdi12_err_t err = sdi12_master_continuous(timing_master(ctx), addr, 0, false, &dresp);
 
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not support R0");
+        TEST_FAIL_MSG(r, "No response to aR0! — basic-set command, silence is not acceptable (§" "4.4.8.1)");
         return r;
     }
     if (err != SDI12_OK) {
@@ -623,7 +623,7 @@ static test_result_t test_continuous_crc(timing_ctx_t *ctx, char addr) {
     sdi12_err_t err = sdi12_master_continuous(timing_master(ctx), addr, 0, true, &dresp);
 
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not support RC0");
+        TEST_FAIL_MSG(r, "No response to aRC0! — basic-set command, silence is not acceptable");
         return r;
     }
     if (err == SDI12_ERR_CRC_MISMATCH) {
@@ -653,7 +653,7 @@ static test_result_t test_verify(timing_ctx_t *ctx, char addr) {
     sdi12_err_t err = sdi12_master_verify(timing_master(ctx), addr, &mresp);
 
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not support V command");
+        TEST_FAIL_MSG(r, "No response to aV! — basic-set command, silence is not acceptable");
         return r;
     }
     if (err != SDI12_OK) {
@@ -738,6 +738,14 @@ static test_result_t test_break_abort(timing_ctx_t *ctx, char addr) {
         TEST_ERROR_MSG(r, "M command failed: error %d", err);
         return r;
     }
+    if (mresp.wait_seconds == 0) {
+        /* Synchronous sensor: the measurement completed before the
+         * break could arrive, and completed data is legitimately
+         * retained — there is nothing in flight to abort. */
+        TEST_SKIP_MSG(r, "ttt=0 (synchronous) — no in-flight measurement "
+                      "to abort");
+        return r;
+    }
 
     /* Immediately send another break */
     sdi12_master_send_break(timing_master(ctx));
@@ -751,7 +759,70 @@ static test_result_t test_break_abort(timing_ctx_t *ctx, char addr) {
         return r;
     }
 
-    TEST_PASS_MSG(r, "Sensor recovered after break during measurement");
+    /* §4.4.5.1: the aborted measurement's buffer is emptied — a D
+     * command must return the bare address, not stale (or late-
+     * arriving) data. A sensor that merely survives the break but
+     * keeps its buffer passes the acknowledge probe and fails here. */
+    sdi12_data_response_t d;
+    err = sdi12_master_get_data(timing_master(ctx), addr, 0, false, &d);
+    if (err == SDI12_OK && d.value_count > 0) {
+        TEST_FAIL_MSG(r, "D0! returned %d value(s) after the break "
+                      "aborted the measurement — buffer must be empty",
+                      d.value_count);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Break aborted the measurement and emptied the buffer");
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  Concurrent Abort by Addressed Command (§4.4.7.1)
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static test_result_t test_concurrent_abort(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Concurrent Abort on Addressed Command",
+                                  "\xc2\xa7" "4.4.7.1");
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_CONCURRENT, 0, false, &mresp);
+    if (err != SDI12_OK) {
+        TEST_ERROR_MSG(r, "C command failed: error %d", err);
+        return r;
+    }
+    if (mresp.value_count == 0) {
+        TEST_SKIP_MSG(r, "Sensor reports 0 concurrent values");
+        return r;
+    }
+    if (mresp.wait_seconds == 0) {
+        TEST_SKIP_MSG(r, "ttt=0 (synchronous) — no in-flight measurement "
+                      "to abort");
+        return r;
+    }
+
+    /* Any valid addressed command aborts the concurrent measurement */
+    bool present = false;
+    sdi12_master_acknowledge(timing_master(ctx), addr, &present);
+    if (!present) {
+        TEST_FAIL_MSG(r, "Sensor did not answer a! during concurrent "
+                      "measurement");
+        return r;
+    }
+
+    /* §4.4.7.1 + §4.4.8: after the abort, D returns no data */
+    sdi12_data_response_t d;
+    err = sdi12_master_get_data(timing_master(ctx), addr, 0, false, &d);
+    if (err == SDI12_OK && d.value_count > 0) {
+        TEST_FAIL_MSG(r, "D0! returned %d value(s) after an addressed "
+                      "command aborted the concurrent measurement",
+                      d.value_count);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Addressed command aborted the concurrent measurement");
     return r;
 }
 
@@ -802,6 +873,14 @@ static test_result_t test_measurement_groups(timing_ctx_t *ctx, char addr) {
         sdi12_err_t err = sdi12_master_start_measurement(
             timing_master(ctx), addr, SDI12_MEAS_STANDARD, g, false, &mresp);
 
+        if (err == SDI12_ERR_TIMEOUT) {
+            /* §4.4.9: "Not responding to the command is not acceptable" —
+             * an empty group answers a0000, silence is a violation. */
+            TEST_FAIL_MSG(r, "No response to aM%u! — \xc2\xa7" "4.4.9: "
+                          "not responding is not acceptable "
+                          "(a0000 expected even with no data)", g);
+            return r;
+        }
         if (err == SDI12_OK && mresp.value_count > 0)
             groups[supported++] = '0' + g;
 
@@ -809,7 +888,7 @@ static test_result_t test_measurement_groups(timing_ctx_t *ctx, char addr) {
     }
 
     if (supported == 0) {
-        TEST_SKIP_MSG(r, "No additional measurement groups");
+        TEST_SKIP_MSG(r, "All groups answered a0000 (no additional groups configured)");
         return r;
     }
 
@@ -1074,21 +1153,39 @@ static bool hv_ascii_cycle(timing_ctx_t *ctx, char addr, test_result_t *r)
         if (len == 1)
             break;  /* bare address — no more data */
 
-        if (!sdi12_crc_verify(m->resp_buf, len)) {
+        /* NOTE: crc_verify takes the RAW length including CR/LF — its
+         * internal minimum-length guard assumes the untrimmed buffer,
+         * and the spec's empty page a<CRC><CR><LF> is only 6 raw bytes. */
+        if (!sdi12_crc_verify(m->resp_buf, m->resp_len)) {
             TEST_FAIL_MSG(*r, "D%u! page lacks the mandatory CRC "
                           "(\xc2\xa7" "5.1: \"The CRC must be present\")",
                           page);
             return true;
         }
+        if (len < 4) {
+            TEST_FAIL_MSG(*r, "D%u! response too short", page);
+            return true;
+        }
 
-        /* Strip address + 3 CRC chars, parse the values field */
-        sdi12_value_t vals[SDI12_MAX_VALUES];
-        uint8_t n = 0;
-        sdi12_master_parse_data_values(m->resp_buf + 1, len - 1 - 3,
-                                       vals, SDI12_MAX_VALUES, &n, false);
+        /* <values> field: 75-char cap and pd.d grammar (§4.4.8) */
+        size_t vals_len = len - 1 - 3;   /* minus address and CRC */
+        if (vals_len > 75) {
+            TEST_FAIL_MSG(*r, "D%u! <values> field is %zu chars — "
+                          "\xc2\xa7" "4.4.8 caps it at 75", page, vals_len);
+            return true;
+        }
+
+        char why[96], bad[16];
+        int n = sdi12v_validate_values(m->resp_buf, len - 3,
+                                       why, sizeof(why), bad, sizeof(bad));
+        if (n < 0) {
+            TEST_FAIL_MSG(*r, "D%u! malformed value \"%s\": %s",
+                          page, bad, why);
+            return true;
+        }
         if (n == 0)
             break;
-        total += n;
+        total += (uint16_t)n;
     }
 
     if (total != mresp.value_count) {
@@ -1120,10 +1217,11 @@ static test_result_t test_ident_param_crc(timing_ctx_t *ctx, char addr) {
     char cmd[16];
 
     /* aIC_001! — Table 20: no CRC in the response */
+    sdi12_master_send_break(m);
     snprintf(cmd, sizeof(cmd), "%cIC_001!", addr);
     sdi12_err_t err = sdi12_master_transact(m, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not answer aIC_001!");
+        TEST_FAIL_MSG(r, "No response to aIC_001! — §" "6.3: v1.4 sensors must support the metadata commands");
         return r;
     }
     if (err == SDI12_OK) {
@@ -1136,6 +1234,9 @@ static test_result_t test_ident_param_crc(timing_ctx_t *ctx, char addr) {
                           "shows none for the aIC_nnn! family");
             return r;
         }
+    } else {
+        TEST_FAIL_MSG(r, "aIC_001! failed with error %d", err);
+        return r;
     }
 
     /* aIHA_001! — Table 20: CRC required */
@@ -1143,19 +1244,21 @@ static test_result_t test_ident_param_crc(timing_ctx_t *ctx, char addr) {
     snprintf(cmd, sizeof(cmd), "%cIHA_001!", addr);
     err = sdi12_master_transact(m, cmd, SDI12_RESPONSE_TIMEOUT_MS);
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not answer aIHA_001!");
+        TEST_FAIL_MSG(r, "No response to aIHA_001! — §" "6.3: v1.4 sensors must support the metadata commands");
         return r;
     }
     if (err == SDI12_OK) {
-        size_t len = m->resp_len;
-        while (len > 0 && (m->resp_buf[len - 1] == '\r' ||
-                           m->resp_buf[len - 1] == '\n'))
-            len--;
-        if (len > 1 && !sdi12_crc_verify(m->resp_buf, len)) {
+        /* Raw length: crc_verify's minimum-length guard assumes the
+         * untrimmed buffer, and the invalid-nnn form a<CRC><CR><LF>
+         * is only 6 raw bytes. */
+        if (m->resp_len > 3 && !sdi12_crc_verify(m->resp_buf, m->resp_len)) {
             TEST_FAIL_MSG(r, "aIHA_001! response lacks the CRC that "
                           "Table 20 requires for the aIHA_nnn! family");
             return r;
         }
+    } else {
+        TEST_FAIL_MSG(r, "aIHA_001! failed with error %d", err);
+        return r;
     }
 
     TEST_PASS_MSG(r, "aIC_nnn! plain, aIHA_nnn! CRC-protected — per Table 20");
@@ -1310,7 +1413,7 @@ static test_result_t test_identify_measurement(timing_ctx_t *ctx, char addr) {
         timing_master(ctx), addr, "M", SDI12_MEAS_STANDARD, &mresp);
 
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(r, "Sensor does not support aIM!");
+        TEST_FAIL_MSG(r, "No response to aIM! — §" "6.3: v1.4 sensors must support the metadata commands");
         return r;
     }
     if (err != SDI12_OK) {
@@ -1488,6 +1591,11 @@ static test_result_t test_concurrent_groups(timing_ctx_t *ctx, char addr) {
         sdi12_err_t err = sdi12_master_start_measurement(
             timing_master(ctx), addr, SDI12_MEAS_CONCURRENT, g, false, &mresp);
 
+        if (err == SDI12_ERR_TIMEOUT) {
+            TEST_FAIL_MSG(r, "No response to aC%u! — \xc2\xa7" "4.4.10: "
+                          "not responding is not acceptable", g);
+            return r;
+        }
         if (err == SDI12_OK && mresp.value_count > 0)
             groups[supported++] = '0' + g;
 
@@ -1495,7 +1603,7 @@ static test_result_t test_concurrent_groups(timing_ctx_t *ctx, char addr) {
     }
 
     if (supported == 0) {
-        TEST_SKIP_MSG(r, "No additional concurrent groups");
+        TEST_SKIP_MSG(r, "All groups answered a00000 (no additional groups configured)");
         return r;
     }
 
@@ -1523,6 +1631,14 @@ static test_result_t test_continuous_groups(timing_ctx_t *ctx, char addr) {
         sdi12_err_t err = sdi12_master_continuous(
             timing_master(ctx), addr, g, false, &dresp);
 
+        if (err == SDI12_ERR_TIMEOUT) {
+            /* §4.4.8.1: a sensor unable to take continuous measurements
+             * must still answer with its address alone. */
+            TEST_FAIL_MSG(r, "No response to aR%u! — \xc2\xa7" "4.4.8.1: "
+                          "sensors unable to measure continuously must "
+                          "still answer", g);
+            return r;
+        }
         if (err == SDI12_OK && dresp.value_count > 0)
             groups[supported++] = '0' + g;
 
@@ -1530,7 +1646,7 @@ static test_result_t test_continuous_groups(timing_ctx_t *ctx, char addr) {
     }
 
     if (supported == 0) {
-        TEST_SKIP_MSG(r, "No additional continuous groups");
+        TEST_SKIP_MSG(r, "All groups answered bare-address (no continuous groups configured)");
         return r;
     }
 
@@ -1564,6 +1680,7 @@ void sensor_tests_register(test_suite_t *suite) {
     test_suite_add(suite, "verify",         "Verification (aV!)",              "\xc2\xa7" "4.4.11",   test_verify);
     test_suite_add(suite, "addr_change",    "Address Change (aAb!)",           "\xc2\xa7" "4.4.4",    test_address_change);
     test_suite_add(suite, "break_abort",    "Break Aborts Measurement",        "\xc2\xa7" "4.4.5.1",    test_break_abort);
+    test_suite_add(suite, "conc_abort",     "Concurrent Abort on Addressed Command", "\xc2\xa7" "4.4.7.1", test_concurrent_abort);
     test_suite_add(suite, "extended",       "Extended Command (aX!)",          "\xc2\xa7" "4.4.13",   test_extended);
     test_suite_add(suite, "extended_ml",    "Extended Multi-Line (aX!)",       "\xc2\xa7" "4.4.13.1",   test_extended_multiline);
     test_suite_add(suite, "meas_groups",    "Measurement Groups (aM1-M9)",     "\xc2\xa7" "4.4.9",    test_measurement_groups);

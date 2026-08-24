@@ -44,6 +44,18 @@ typedef enum {
      *  the correct contract is timeout-to-first-byte, then read to LF
      *  with an inter-character timeout. */
     LB_FAULT_PACED_UART       = 1u << 3,
+
+    /** read_param returns values whose formatted widths sum to exactly
+     *  75 characters — the precise <values> limit of the 75-char page
+     *  classes (§4.4.8). Exposes off-by-one page-boundary arithmetic
+     *  that silently drops the value landing on the boundary. */
+    LB_FAULT_BOUNDARY_VALUES  = 1u << 4,
+
+    /** read_param returns a value whose integer digits + requested
+     *  decimals cannot fit the 9-char value cap (e.g. 9999999.0 with
+     *  decimals=6). A formatter that truncates instead of reducing
+     *  precision emits grammar-invalid output such as "+9999999.". */
+    LB_FAULT_OVERWIDE_VALUE   = 1u << 5,
 } lb_fault_t;
 
 /** Set the active fault mask on a loopback HAL (LB_FAULT_NONE clears). */
