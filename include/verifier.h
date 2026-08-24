@@ -59,5 +59,6 @@ int verifier_run_transparent(verifier_ctx_t *ctx);
 
 void sensor_tests_register(test_suite_t *suite);
 void recorder_tests_register(test_suite_t *suite);
+void selftest_fault_tests_register(test_suite_t *suite); /* --self-test only */
 
 #endif /* VERIFIER_H */

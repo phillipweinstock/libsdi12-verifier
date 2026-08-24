@@ -21,11 +21,13 @@
  *   // use as drop-in replacement for hal_create_default()
  */
 #include "hal.h"
+#include "hal_loopback.h"
 #include "sdi12.h"
 #include "sdi12_sensor.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -95,12 +97,37 @@ typedef struct {
 
     /* Break state tracking */
     bool               break_active;
+
+    /* Active fault-injection mask (lb_fault_t bits) */
+    unsigned           faults;
+
+    /* True while the command being processed is an aDBn! request —
+     * lets the response path identify binary packets for fault rewrites */
+    bool               cmd_is_db;
 } loopback_priv_t;
 
 /* ── Sensor Callbacks ─────────────────────────────────────────── */
 
 static void lb_send_response(const char *data, size_t len, void *user_data) {
     loopback_priv_t *p = (loopback_priv_t *)user_data;
+
+    /* Foreign-sensor fault: re-address aDBn! binary packets to a different
+     * sensor address and recompute the CRC so the packet is internally
+     * valid — exactly what a misbehaving second sensor on the bus emits.
+     * Binary packet layout (§5.2 Table 14):
+     *   addr(1) + pkt_size(2 LE) + type(1) + payload(N) + CRC(2 LE)   */
+    if ((p->faults & LB_FAULT_FOREIGN_BIN_ADDR) && p->cmd_is_db &&
+        len >= 6 && len <= LB_RING_SIZE) {
+        char pkt[LB_RING_SIZE];
+        memcpy(pkt, data, len);
+        pkt[0] = (p->addr == '1') ? '2' : '1';   /* some other address */
+        uint16_t crc = sdi12_crc16(pkt, len - 2);
+        pkt[len - 2] = (char)(crc & 0xFF);
+        pkt[len - 1] = (char)((crc >> 8) & 0xFF);
+        lb_ring_put(&p->resp, pkt, len);
+        return;
+    }
+
     lb_ring_put(&p->resp, data, len);
 }
 
@@ -110,8 +137,21 @@ static void lb_set_direction(sdi12_dir_t dir, void *user_data) {
 }
 
 static sdi12_value_t lb_read_param(uint8_t idx, void *user_data) {
-    (void)user_data;
+    loopback_priv_t *p = (loopback_priv_t *)user_data;
     sdi12_value_t v;
+
+    /* Hostile-values fault: what a dead ADC / failed conversion returns.
+     * A compliant sensor must never let these mis-format on the wire. */
+    if (p->faults & LB_FAULT_HOSTILE_VALUES) {
+        switch (idx) {
+        case 0: v.value = nanf("");   v.decimals = 0; return v;
+        case 1: v.value = INFINITY;   v.decimals = 2; return v;
+        case 2: v.value = 1e30f;      v.decimals = 0; return v;
+        case 3: v.value = -0.0f;      v.decimals = 2; return v;
+        default: break;
+        }
+    }
+
     if (idx < LB_PARAM_COUNT) {
         v.value    = LB_VALUES[idx];
         v.decimals = 2;
@@ -131,8 +171,23 @@ static size_t lb_format_binary_page(uint16_t page,
                                      uint8_t count,
                                      char *buf, size_t buflen,
                                      void *user_data) {
-    (void)user_data;
+    loopback_priv_t *p = (loopback_priv_t *)user_data;
     if (page > 0) return 0;  /* all values fit on page 0 */
+
+    /* Doc-contract fault: implement the callback exactly as documented in
+     * sdi12_sensor.h — "Return number of payload bytes written starting at
+     * buf[1]" — with no type prefix byte. If the library implementation
+     * follows a different convention than its documentation, the resulting
+     * wire packet mis-frames and the self-test catches it. */
+    if (p->faults & LB_FAULT_DOC_CONTRACT_BIN) {
+        size_t doc_needed = (size_t)count * sizeof(float);
+        if (doc_needed > buflen - 1) return 0;
+        for (uint8_t i = 0; i < count; i++) {
+            float f = values[i].value;
+            memcpy(&buf[1 + i * sizeof(float)], &f, sizeof(float));
+        }
+        return doc_needed;  /* payload bytes at buf[1], per the docs */
+    }
 
     /* buf[0] = address (already set by library)
      * buf[1] = type prefix byte
@@ -208,8 +263,12 @@ static void lb_flush(hal_t *self) {
     char *bang = (char *)memchr(p->cmd_buf, '!', p->cmd_len);
     if (bang) {
         size_t cmd_end = (size_t)(bang - p->cmd_buf);
+        /* Flag aDBn! requests so fault rewrites can target binary packets */
+        p->cmd_is_db = (cmd_end >= 3 &&
+                        p->cmd_buf[1] == 'D' && p->cmd_buf[2] == 'B');
         /* Process through sensor (without '!') */
         sdi12_sensor_process(&p->sensor, p->cmd_buf, cmd_end);
+        p->cmd_is_db = false;
     }
 
     p->cmd_len = 0;
@@ -324,4 +383,10 @@ hal_t *hal_create_loopback(char addr) {
     h->priv      = p;
 
     return h;
+}
+
+void hal_loopback_set_faults(hal_t *hal, unsigned faults) {
+    if (!hal || !hal->priv) return;
+    loopback_priv_t *p = (loopback_priv_t *)hal->priv;
+    p->faults = faults;
 }

@@ -44,6 +44,7 @@ add_executable(sdi12-verifier
     src/timing.c
     src/test_suite.c
     src/sensor_tests.c
+    src/selftest_faults.c
     src/recorder_tests.c
     src/monitor.c
     src/reporter.c

@@ -232,6 +232,10 @@ int verifier_run_sensor_tests(verifier_ctx_t *ctx) {
     memset(&suite, 0, sizeof(suite));
     suite.name = "SDI-12 Sensor Compliance";
     sensor_tests_register(&suite);
+    /* Fault-injection tests exercise the loopback's simulated sensor —
+     * meaningless (and unsafe to assume) against external hardware */
+    if (ctx->self_test)
+        selftest_fault_tests_register(&suite);
 
     /* Pre-scan: identify the sensor and store in report */
     sdi12_master_send_break(timing_master(&ctx->timing));
