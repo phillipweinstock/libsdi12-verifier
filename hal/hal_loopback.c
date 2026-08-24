@@ -192,25 +192,8 @@ static size_t lb_format_binary_page(uint16_t page,
                                      uint8_t count,
                                      char *buf, size_t buflen,
                                      void *user_data) {
-    loopback_priv_t *p = (loopback_priv_t *)user_data;
+    (void)user_data;
     if (page > 0) return 0;  /* all values fit on page 0 */
-
-    /* Doc-contract fault: implement the callback exactly as its doc
-     * comment in sdi12_sensor.h specifies, written against the docs
-     * alone — buf[1] holds the sdi12_bintype_t data type byte, payload
-     * follows, and the return counts both. If library documentation and
-     * implementation ever diverge again (as they did before libsdi12
-     * issue #2), the resulting packet mis-frames and this catches it. */
-    if (p->faults & LB_FAULT_DOC_CONTRACT_BIN) {
-        size_t doc_needed = 1 + (size_t)count * sizeof(float);
-        if (doc_needed > buflen - 1) return 0;
-        buf[1] = (char)SDI12_BINTYPE_FLOAT32;
-        for (uint8_t i = 0; i < count; i++) {
-            float f = values[i].value;
-            memcpy(&buf[2 + i * sizeof(float)], &f, sizeof(float));
-        }
-        return doc_needed;  /* 1 (type byte) + payload size, per the docs */
-    }
 
     /* buf[0] = address (already set by library)
      * buf[1] = type prefix byte

@@ -39,6 +39,13 @@ struct hal {
     void     (*set_break)(hal_t *self, bool enable);
     void     (*set_rts)(hal_t *self, bool high);
 
+    /** Optional (may be NULL): reconfigure line framing without closing
+     *  the port. §5.2 requires 8 data bits / no parity for aDBn! binary
+     *  packets while everything else runs 7E1 — a port left at 7E1
+     *  corrupts every binary payload's 8th bit. data_bits: 7 or 8;
+     *  parity: 0 = none, 2 = even. */
+    void     (*set_framing)(hal_t *self, uint8_t data_bits, uint8_t parity);
+
     /* High-resolution timing */
     uint64_t (*micros)(hal_t *self);
     void     (*delay_ms)(hal_t *self, uint32_t ms);

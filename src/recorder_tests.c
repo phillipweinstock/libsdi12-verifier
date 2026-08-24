@@ -397,8 +397,14 @@ static test_result_t test_rec_break(timing_ctx_t *ctx, char addr) {
         sdi12_sensor_process(&g_sim.sensor, g_sim.last_cmd, g_sim.last_cmd_len - 1);
     }
 
+    /* A UART cannot measure break DURATION: a compliant 12-17 ms break
+     * is delivered as a single framing-error NUL, so the NUL-spread
+     * "duration" reads ~0-3 ms regardless of the real line state.
+     * Failing on that number falsely condemns compliant recorders —
+     * report presence, and the measured spread as informational only. */
     if (r.measured_us < r.spec_limit_us) {
-        TEST_FAIL_MSG(r, "Break %.3f ms is shorter than 12ms minimum",
+        TEST_PASS_MSG(r, "Break detected (UART-visible spread %.3f ms; "
+                      "true duration needs line-level instrumentation)",
                       r.measured_us / 1000.0);
         return r;
     }
@@ -445,10 +451,15 @@ static test_result_t test_rec_marking(timing_ctx_t *ctx, char addr) {
 
     uint64_t marking_us = g_sim.marking_end_us - g_sim.break_end_us;
     r.measured_us   = marking_us;
-    r.spec_limit_us = SDI12_MARK_AFTER_BREAK_MS * 1000;
+    /* §7.0: 8.33 ms with a -0.40 ms tolerance — the minimum is
+     * 7.93 ms. SDI12_MARK_AFTER_BREAK_MS (9) is rounded UP for use as
+     * a sender's safety margin; using it as a floor fails recorders
+     * marking a perfectly compliant 8.33 ms. */
+    r.spec_limit_us = 7930;
 
     if (marking_us < r.spec_limit_us) {
-        TEST_FAIL_MSG(r, "Marking %.3f ms is shorter than 8.33ms minimum",
+        TEST_FAIL_MSG(r, "Marking %.3f ms is shorter than the 7.93 ms "
+                      "minimum (8.33 ms - 0.40 ms tolerance)",
                       marking_us / 1000.0);
         return r;
     }
@@ -637,9 +648,13 @@ static test_result_t test_rec_interchar(timing_ctx_t *ctx, char addr) {
     }
 
     /* Find largest gap between consecutive bytes */
+    /* Consecutive read timestamps include the 8.33 ms each character
+     * occupies on the wire — subtract it so back-to-back characters
+     * measure as a ~0 ms gap instead of failing every real recorder. */
     uint64_t max_gap = 0;
     for (size_t i = 1; i < g_sim.cmd_byte_count; i++) {
-        uint64_t gap = g_sim.cmd_byte_times[i] - g_sim.cmd_byte_times[i - 1];
+        uint64_t delta = g_sim.cmd_byte_times[i] - g_sim.cmd_byte_times[i - 1];
+        uint64_t gap = delta > 8333 ? delta - 8333 : 0;
         if (gap > max_gap)
             max_gap = gap;
     }
@@ -1228,11 +1243,15 @@ static test_result_t test_rec_extended(timing_ctx_t *ctx, char addr) {
         return r;
     }
 
-    /* Sensor auto-responded via the simulated sensor process */
+    /* The sim registers no extended handlers, so the library answers
+     * an unknown aX...! with the bare-address fail-safe. A recorder
+     * whose X command produced no response at all indicates it sent
+     * something the sensor discarded as malformed. */
     if (g_sim.last_response_len > 0 && g_sim.last_response[0] == addr) {
         TEST_PASS_MSG(r, "Extended command handled: \"%s\"", g_sim.last_cmd);
     } else {
-        TEST_PASS_MSG(r, "Extended command received: \"%s\"", g_sim.last_cmd);
+        TEST_FAIL_MSG(r, "Extended command \"%s\" produced no sensor "
+                      "response", g_sim.last_cmd);
     }
 
     return r;

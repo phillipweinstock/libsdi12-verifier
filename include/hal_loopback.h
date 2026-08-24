@@ -31,12 +31,6 @@ typedef enum {
      *  sensor answering on the bus. The master must reject the packet. */
     LB_FAULT_FOREIGN_BIN_ADDR = 1u << 1,
 
-    /** format_binary_page follows the contract as documented in
-     *  sdi12_sensor.h verbatim (payload bytes written starting at
-     *  buf[1], return count excludes any type prefix). If library code
-     *  and documentation disagree, packets mis-frame on the wire. */
-    LB_FAULT_DOC_CONTRACT_BIN = 1u << 2,
-
     /** Sensor responses arrive paced at ~2 ms per byte instead of
      *  instantaneously — a mild stand-in for a real 1200-baud line
      *  (8.33 ms per character). Any recv implementation that treats

@@ -1,6 +1,6 @@
 /**
  * @file sensor_tests.c
- * @brief SDI-12 sensor compliance tests (31 tests).
+ * @brief SDI-12 sensor compliance tests.
  *
  * Each test exercises a specific aspect of the SDI-12 v1.4 specification.
  * Tests use the libsdi12 master API through the timing interposition
@@ -193,7 +193,7 @@ static test_result_t test_wrong_address_silence(timing_ctx_t *ctx, char addr) {
 
 /* ══════════════════════════════════════════════════════════════════════
  *  5. Response Timing (<=15ms)
- *  §4.2.3 — Sensor must respond within 15ms of command stop bit
+ *  §7.0 — Sensor must respond within 15ms of command stop bit
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_response_timing(timing_ctx_t *ctx, char addr) {
@@ -224,7 +224,7 @@ static test_result_t test_response_timing(timing_ctx_t *ctx, char addr) {
 
 /* ══════════════════════════════════════════════════════════════════════
  *  6. Inter-Character Gap (<=1.66ms)
- *  §4.2.4 — Max gap between characters within a response
+ *  §7.0 — Max gap between characters within a response
  * ══════════════════════════════════════════════════════════════════════ */
 
 static test_result_t test_interchar_gap(timing_ctx_t *ctx, char addr) {
@@ -684,6 +684,12 @@ static test_result_t test_address_change(timing_ctx_t *ctx, char addr) {
         return r;
     }
 
+    /* §4.4.4: after responding, the sensor may ignore further commands
+     * for up to one second while it persists the address to
+     * non-volatile memory. Probing sooner false-fails EEPROM-writing
+     * sensors and can leave the device stranded at the temp address. */
+    ctx->hal->delay_ms(ctx->hal, 1100);
+
     /* Verify at new address */
     sdi12_master_send_break(timing_master(ctx));
     bool present = false;
@@ -694,12 +700,14 @@ static test_result_t test_address_change(timing_ctx_t *ctx, char addr) {
         /* Try to restore */
         sdi12_master_send_break(timing_master(ctx));
         sdi12_master_change_address(timing_master(ctx), temp, addr);
+        ctx->hal->delay_ms(ctx->hal, 1100);
         return r;
     }
 
     /* Restore original */
     sdi12_master_send_break(timing_master(ctx));
     err = sdi12_master_change_address(timing_master(ctx), temp, addr);
+    ctx->hal->delay_ms(ctx->hal, 1100);
 
     if (err != SDI12_OK) {
         TEST_ERROR_MSG(r, "RESTORE FAILED %c->%c! Sensor may be at '%c'", temp, addr, temp);
@@ -911,13 +919,16 @@ static test_result_t test_bus_scan(timing_ctx_t *ctx, char addr) {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz";
 
-    sdi12_master_send_break(timing_master(ctx));
-
     int  found = 0;
     char found_addrs[64];
     memset(found_addrs, 0, sizeof(found_addrs));
 
     for (size_t i = 0; i < sizeof(addrs) - 1; i++) {
+        /* §7.0/§7.1: a sensor that saw a command for another address
+         * drops to standby and needs a break to wake — one break per
+         * probe, or every sensor after the first mismatch sleeps
+         * through its own probe. */
+        sdi12_master_send_break(timing_master(ctx));
         bool present = false;
         sdi12_master_acknowledge(timing_master(ctx), addrs[i], &present);
         if (present)
@@ -1069,13 +1080,12 @@ static test_result_t test_response_compliance(timing_ctx_t *ctx, char addr) {
 /**
  * Helper: run a full HV measurement cycle.
  *
- * Sends aHA!/aHAC! → waits for service request → fetches D0..D9+ pages
+ * Sends aHA! → waits for service request → fetches aD0!..aD999! pages
  * until all values are retrieved.  Validates total value count matches
  * the nnn field from the measurement response.
  *
  * @param ctx     Timing context.
  * @param addr    Sensor address.
- * @param crc     If true, sends aHAC! and verifies CRC on each D page.
  * @param r       Test result to populate.
  * @return true if the test completed (pass or fail), false to skip.
  */
@@ -1266,7 +1276,7 @@ static test_result_t test_ident_param_crc(timing_ctx_t *ctx, char addr) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- *  25 / 31. High-Volume Binary (aHB! / aHBC!)
+ *  High-Volume Binary (aHB!)
  *  §5.2 — Binary packet framing: aDBn! retrieves
  *         addr(1) + pkt_size(2 LE) + type(1) + payload(N) + CRC(2 LE)
  * ══════════════════════════════════════════════════════════════════════ */
@@ -1274,7 +1284,7 @@ static test_result_t test_ident_param_crc(timing_ctx_t *ctx, char addr) {
 /**
  * Helper: run a full HV binary measurement cycle.
  *
- * Sends aHB!/aHBC! → waits for service request → fetches binary data
+ * Sends aHB! → waits for service request → fetches binary data
  * pages via aDBn! per §5.2.  Each binary packet is verified for:
  *   - 16-bit CRC (always present in binary packets)
  *   - Valid binary type code

@@ -15,6 +15,7 @@
 static void cb_send(const char *data, size_t len, void *user_data) {
     timing_ctx_t *t = (timing_ctx_t *)user_data;
 
+    t->line_count   = 0;   /* new command — reset multi-line tracking */
     t->cmd_start_us = t->hal->micros(t->hal);
 
     if (t->use_rts)
@@ -40,7 +41,9 @@ static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_dat
     t->byte_count    = 0;
     t->resp_start_us = 0;
     t->resp_end_us   = 0;
-    t->line_count    = 0;
+    /* line_count is NOT reset here: multi-line responses arrive as one
+     * recv call per line, and inter-line gap measurement needs the
+     * timestamps to accumulate across calls. cb_send resets it. */
 
     /* Per the libsdi12 recv contract, timeout_ms bounds the wait for
      * the FIRST byte only — it is the spec's 15 ms response window,
@@ -130,10 +133,21 @@ int timing_init(timing_ctx_t *ctx, hal_t *hal, bool use_rts) {
     return sdi12_master_init(&ctx->master, &cb) == SDI12_OK ? 0 : -1;
 }
 
+/* One character of line time at 1200 baud, 10 bits/char (7E1): a byte
+ * is observed ~8.33 ms after its start bit, so raw read timestamps
+ * overstate spec latencies by one character time. Compensate, or every
+ * compliant sensor measures late on real hardware. */
+#define TIMING_CHAR_TIME_US 8333u
+
 uint64_t timing_response_latency_us(const timing_ctx_t *ctx) {
     if (ctx->resp_start_us == 0 || ctx->cmd_end_us == 0)
         return 0;
-    return ctx->resp_start_us - ctx->cmd_end_us;
+    uint64_t raw = ctx->resp_start_us - ctx->cmd_end_us;
+    /* Loopback delivery is faster than one character time — leave
+     * sub-character measurements uncompensated. */
+    if (raw <= TIMING_CHAR_TIME_US)
+        return raw;
+    return raw - TIMING_CHAR_TIME_US;
 }
 
 uint64_t timing_break_duration_us(const timing_ctx_t *ctx) {
@@ -143,9 +157,16 @@ uint64_t timing_break_duration_us(const timing_ctx_t *ctx) {
 }
 
 uint64_t timing_max_interchar_gap_us(const timing_ctx_t *ctx) {
+    /* The spec's 1.66 ms inter-character limit is MARKING time between
+     * characters. Consecutive read timestamps include the 8.33 ms the
+     * character itself occupies on the wire — subtract it, else
+     * back-to-back characters measure as an 8.33 ms 'gap' and every
+     * compliant sensor fails on real hardware. */
     uint64_t max_gap = 0;
     for (size_t i = 1; i < ctx->byte_count; i++) {
-        uint64_t gap = ctx->byte_times_us[i] - ctx->byte_times_us[i - 1];
+        uint64_t delta = ctx->byte_times_us[i] - ctx->byte_times_us[i - 1];
+        uint64_t gap = delta > TIMING_CHAR_TIME_US
+                       ? delta - TIMING_CHAR_TIME_US : 0;
         if (gap > max_gap)
             max_gap = gap;
     }

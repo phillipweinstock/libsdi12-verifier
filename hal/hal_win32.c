@@ -118,6 +118,20 @@ static size_t win32_read(hal_t *self, char *buf, size_t max, uint32_t timeout_ms
     return (size_t)bytes_read;
 }
 
+
+static void win32_set_framing(hal_t *self, uint8_t data_bits, uint8_t parity) {
+    win32_priv_t *p = (win32_priv_t *)self->priv;
+    DCB dcb;
+    memset(&dcb, 0, sizeof(dcb));
+    dcb.DCBlength = sizeof(dcb);
+    if (!GetCommState(p->hComm, &dcb)) return;
+    dcb.ByteSize = data_bits;
+    dcb.Parity   = (parity == 2) ? EVENPARITY :
+                   (parity == 1) ? ODDPARITY  : NOPARITY;
+    dcb.fParity  = (parity != 0) ? TRUE : FALSE;
+    SetCommState(p->hComm, &dcb);
+}
+
 static void win32_flush(hal_t *self) {
     win32_priv_t *p = (win32_priv_t *)self->priv;
     FlushFileBuffers(p->hComm);
@@ -185,6 +199,7 @@ hal_t *hal_create_default(void) {
     h->flush     = win32_flush;
     h->set_break = win32_set_break;
     h->set_rts   = win32_set_rts;
+    h->set_framing = win32_set_framing;
     h->micros    = win32_micros;
     h->delay_ms  = win32_delay_ms;
     h->delay_us  = win32_delay_us;

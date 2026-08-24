@@ -136,6 +136,17 @@ static void posix_set_break(hal_t *self, bool enable) {
         ioctl(p->fd, TIOCCBRK);
 }
 
+static void posix_set_framing(hal_t *self, uint8_t data_bits, uint8_t parity) {
+    posix_priv_t *p = (posix_priv_t *)self->priv;
+    struct termios tio;
+    if (tcgetattr(p->fd, &tio) != 0) return;
+    tio.c_cflag &= ~(tcflag_t)(CSIZE | PARENB | PARODD);
+    tio.c_cflag |= (data_bits == 8) ? CS8 : CS7;
+    if (parity == 2) tio.c_cflag |= PARENB;
+    else if (parity == 1) tio.c_cflag |= PARENB | PARODD;
+    tcsetattr(p->fd, TCSADRAIN, &tio);
+}
+
 static void posix_set_rts(hal_t *self, bool high) {
     posix_priv_t *p = (posix_priv_t *)self->priv;
     int bits = TIOCM_RTS;
@@ -188,6 +199,7 @@ hal_t *hal_create_default(void) {
     h->flush     = posix_flush;
     h->set_break = posix_set_break;
     h->set_rts   = posix_set_rts;
+    h->set_framing = posix_set_framing;
     h->micros    = posix_micros;
     h->delay_ms  = posix_delay_ms;
     h->delay_us  = posix_delay_us;

@@ -74,6 +74,13 @@ int timing_init(timing_ctx_t *ctx, hal_t *hal, bool use_rts);
  */
 static inline void timing_set_binary_recv(timing_ctx_t *ctx, bool enable) {
     ctx->binary_recv_mode = enable;
+    /* §5.2: aDBn! binary packets are framed 8N1 while everything else
+     * is 7E1 — reconfigure the line where the HAL supports it (real
+     * serial ports do; the loopback doesn't need to). */
+    if (ctx->hal && ctx->hal->set_framing) {
+        if (enable) ctx->hal->set_framing(ctx->hal, 8, 0);
+        else        ctx->hal->set_framing(ctx->hal, 7, 2);
+    }
 }
 
 /** Microseconds between command TX completion and first response byte. */

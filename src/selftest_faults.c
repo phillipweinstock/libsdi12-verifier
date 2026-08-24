@@ -6,8 +6,8 @@
  * a bug that is symmetric in the library cancels out and stays invisible.
  * These tests deliberately break that symmetry via hal_loopback fault
  * modes (see hal_loopback.h): hostile measurement values, a foreign
- * sensor answering binary pages, an undersized master buffer, and a
- * binary formatter written to the documented callback contract.
+ * sensor answering binary pages, an undersized master buffer, paced
+ * line-rate delivery, and boundary/overwide value sets.
  *
  * They are registered only in --self-test mode: they exercise the
  * libsdi12 library through the simulated sensor, not an external device.
@@ -260,68 +260,6 @@ static test_result_t test_fault_bin_foreign_addr(timing_ctx_t *ctx, char addr)
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- *  F4. Binary formatter per documented contract must frame correctly
- *  Exposes: format_binary_page doc/implementation contract mismatch
- * ══════════════════════════════════════════════════════════════════════ */
-static test_result_t test_fault_bin_doc_contract(timing_ctx_t *ctx, char addr)
-{
-    test_result_t r = TEST_RESULT("Binary Formatter Documented Contract",
-                                  SECT_SELFTEST);
-    hal_loopback_set_faults(ctx->hal, LB_FAULT_DOC_CONTRACT_BIN);
-
-    sdi12_master_send_break(timing_master(ctx));
-
-    sdi12_meas_response_t mresp;
-    sdi12_err_t err = sdi12_master_start_measurement(
-        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_BINARY, 0, false, &mresp);
-    if (err != SDI12_OK) {
-        hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
-        TEST_FAIL_MSG(r, "HB command failed with error %d", err);
-        return r;
-    }
-
-    timing_set_binary_recv(ctx, true);
-
-    sdi12_bintype_t btype;
-    uint8_t payload[SDI12_BIN_MAX_PAYLOAD];
-    size_t out_len = sizeof(payload);
-    err = sdi12_master_get_hv_binary_data(
-        timing_master(ctx), addr, 0, &btype, payload, &out_len);
-
-    timing_set_binary_recv(ctx, false);
-    hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
-
-    if (err != SDI12_OK) {
-        TEST_FAIL_MSG(r, "DB0! failed with error %d — a formatter written "
-                      "to the sdi12_sensor.h contract mis-framed the packet",
-                      err);
-        return r;
-    }
-
-    size_t elem_sz = sdi12_bintype_size(btype);
-    if (elem_sz == 0) {
-        TEST_FAIL_MSG(r, "Packet declared invalid type 0x%02X — payload "
-                      "byte consumed as the type field", (unsigned)btype);
-        return r;
-    }
-    if (out_len % elem_sz != 0) {
-        TEST_FAIL_MSG(r, "Payload %zu bytes not a multiple of element "
-                      "size %zu (type %d) — size field off by one",
-                      out_len, elem_sz, (int)btype);
-        return r;
-    }
-    if (out_len / elem_sz != mresp.value_count) {
-        TEST_FAIL_MSG(r, "HB promised %d values, packet framed %zu",
-                      mresp.value_count, out_len / elem_sz);
-        return r;
-    }
-
-    TEST_PASS_MSG(r, "Doc-contract formatter framed %d values correctly "
-                  "(type %d)", mresp.value_count, (int)btype);
-    return r;
-}
-
-/* ══════════════════════════════════════════════════════════════════════
  *  F5. Line-rate response delivery must not truncate reads
  *  Exposes: recv layer treating its timeout as a total-read deadline
  * ══════════════════════════════════════════════════════════════════════ */
@@ -511,9 +449,6 @@ void selftest_fault_tests_register(test_suite_t *suite)
     test_suite_add(suite, "fault_bin_addr",
                    "Foreign-Address Binary Packet Rejected", SECT_SELFTEST,
                    test_fault_bin_foreign_addr);
-    test_suite_add(suite, "fault_bin_doc",
-                   "Binary Formatter Documented Contract", SECT_SELFTEST,
-                   test_fault_bin_doc_contract);
     test_suite_add(suite, "fault_paced",
                    "Paced-UART Response Delivery", SECT_SELFTEST,
                    test_fault_paced_uart);

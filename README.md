@@ -6,7 +6,7 @@ Uses [libsdi12](https://github.com/phillipweinstock/libsdi12) under the hood.
 
 ## What it does
 
-- Runs **47 compliance tests** against the SDI-12 v1.4 spec — commands, timing, CRC, the lot
+- Runs **47 compliance tests** (31 sensor + 16 recorder) against the SDI-12 v1.4 spec — commands, timing, CRC, the lot; `--self-test` adds 7 fault-injection tests
 - Tests both **sensors** (verifier acts as recorder) and **recorders** (verifier simulates a sensor)
 - Measures response timing down to the microsecond (response latency, inter-character gaps, break duration)
 - Outputs a compliance report as plain text or JSON, with references to the relevant spec sections
@@ -80,9 +80,9 @@ The verifier acts as the data recorder, sends commands, and validates every aspe
 | 25 | `bus_scan` | Full Bus Scan | `0!`–`z!` | §4.3 | All 62 addresses scanned |
 | 26 | `resp_compliance` | Response Compliance | various | §4.3/4.4 | Response format, addressing, terminator |
 | 27 | `hv_ascii` | High-Volume ASCII | `aHA!` | §5.1 | HV ASCII measurement + data pages |
-| 28 | `hv_ascii_crc` | High-Volume ASCII + CRC | `aHAC!` | §5.1/4.4.12 | CRC verified on HV ASCII data |
+| 28 | `ident_param_crc` | Identify-Param CRC Polarity | `aIC_001!` `aIHA_001!` | §6.2 | CRC only for the MC/CC/RC/HA/HB families |
 | 29 | `hv_binary` | High-Volume Binary | `aHB!` | §5.2 | aDBn! binary packet framing, type/length/payload decode |
-| 30 | `hv_binary_crc` | High-Volume Binary + CRC | `aHBC!` | §5.2 | 16-bit binary CRC verified on every packet |
+| 30 | `conc_abort` | Concurrent Abort on Addressed Command | `aC!` + `a!` + `aD0!` | §4.4.7.1 | Addressed command aborts and empties the buffer |
 | 31 | `identify_meas` | Identify Measurement | `aIM!` | §6.1 | Measurement metadata listing |
 
 ## Recorder Compliance Tests (16)
@@ -124,11 +124,11 @@ The verifier acts as a simulated SDI-12 sensor. It responds correctly to command
           Acknowledged in 2.340 ms
           Measured: 2.340 ms (limit: 15.000 ms)
 
-  [PASS ] Response Timing (<=15ms)                §4.2.3
+  [PASS ] Response Timing (<=15ms)                §7.0
           8.120 ms (limit: 15.000 ms)
           Measured: 8.120 ms (limit: 15.000 ms)
 
-  [FAIL ] Inter-Character Gap (<=1.66ms)          §4.2.4
+  [FAIL ] Inter-Character Gap (<=1.66ms)          §7.0
           Max gap 2.450 ms exceeds 1.660 ms limit
           Measured: 2.450 ms (limit: 1.660 ms)
 
@@ -244,7 +244,7 @@ libsdi12's sensor implementation:
 |-----|---------------|-----|
 | `send_response()` used `strlen()` on binary payloads, truncating at embedded null bytes | §5.2 (HV binary packet) | Added `resp_len` field; use explicit length when set |
 | `sdi12_crc_append()` used `strlen()` — same truncation for binary CRC | §4.4.12 (CRC computation) | Added `sdi12_crc_append_n()` with explicit length |
-| HV dispatch always passed `crc=true` for both `aHA!` and `aHB!` | §5.1/5.2 | Fixed to detect `'C'` suffix (`aHAC!`/`aHBC!`) |
+| `aHAC!`/`aHBC!` are not spec commands | §5.1/5.2 | Removed; the CRC on `aHA!` data pages is mandatory and always verified |
 | D-page pagination lost all data when values spanned more than one page — `aD0!` returned empty, `aD1!`+ always empty | §4.4.8 | Page boundaries now tracked for all values; loopback sim enlarged to 9 values so the self-test covers pagination |
 | Master `get_data()`/`continuous()` never actually verified the CRC it claimed to check | §4.4.12 | CRC now verified over the raw response; corrupt data returns `SDI12_ERR_CRC_MISMATCH` |
 
@@ -259,11 +259,11 @@ Key points verified:
 | CRC-16-IBM algorithm | §4.4.12.1 | ✅ Polynomial 0xA001, init 0x0000, matches spec pseudocode |
 | CRC ASCII encoding | §4.4.12.2 | ✅ 3 chars, each `0x40 \| 6bits` |
 | CRC scope | §4.4.12.1 | ✅ Address through last data char (before CR) |
-| HV ASCII: CRC mandatory | §5.1 | ✅ Tested via `aHA!` / `aHAC!` |
+| HV ASCII: CRC mandatory | §5.1 | ✅ Verified on every `aDn!` page after `aHA!` |
 | HV binary data types | §5.2.1 Table 16 | ✅ All 10 types (int8–uint64, float32/64) |
 | HV binary packet format | §5.2 Table 14 | ✅ Native `aDBn!` framing: addr + 16-bit size + type + payload + 16-bit binary CRC |
-| Response timing ≤15 ms | §4.2.3 | ✅ |
-| Inter-character gap ≤1.66 ms | §4.2.4 | ✅ |
+| Response timing ≤15 ms | §7.0 | ✅ |
+| Inter-character gap ≤1.66 ms | §7.0 | ✅ |
 | Break ≥12 ms | §4.2.1 | ✅ |
 | Marking after break ≥8.33 ms | §4.2.1 | ✅ |
 | Service request format | §4.4.6 | ✅ |
