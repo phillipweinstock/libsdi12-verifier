@@ -1000,21 +1000,22 @@ static test_result_t test_response_compliance(timing_ctx_t *ctx, char addr) {
  * @param r       Test result to populate.
  * @return true if the test completed (pass or fail), false to skip.
  */
-static bool hv_ascii_cycle(timing_ctx_t *ctx, char addr, bool crc,
-                           test_result_t *r)
+static bool hv_ascii_cycle(timing_ctx_t *ctx, char addr, test_result_t *r)
 {
     sdi12_master_send_break(timing_master(ctx));
 
+    /* The spec defines only aHA! — there is no aHAC! variant, because
+     * the CRC on the data pages is mandatory regardless (§5.1). */
     sdi12_meas_response_t mresp;
     sdi12_err_t err = sdi12_master_start_measurement(
-        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_ASCII, 0, crc, &mresp);
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_ASCII, 0, false, &mresp);
 
     if (err == SDI12_ERR_TIMEOUT) {
-        TEST_SKIP_MSG(*r, "Sensor does not support aH%s!", crc ? "AC" : "A");
+        TEST_SKIP_MSG(*r, "Sensor does not support aHA!");
         return false;
     }
     if (err != SDI12_OK) {
-        TEST_FAIL_MSG(*r, "H%s command failed: error %d", crc ? "AC" : "A", err);
+        TEST_FAIL_MSG(*r, "HA command failed: error %d", err);
         return true;
     }
     if (mresp.address != addr) {
@@ -1028,7 +1029,7 @@ static bool hv_ascii_cycle(timing_ctx_t *ctx, char addr, bool crc,
         return true;
     }
     if (mresp.value_count == 0) {
-        TEST_SKIP_MSG(*r, "Sensor reports 0 values for H%s", crc ? "AC" : "A");
+        TEST_SKIP_MSG(*r, "Sensor reports 0 values for HA");
         return false;
     }
 
@@ -1046,53 +1047,118 @@ static bool hv_ascii_cycle(timing_ctx_t *ctx, char addr, bool crc,
         }
     }
 
-    /* Fetch D pages until all values retrieved (up to 10 pages) */
+    /* Fetch aD0!..aD999! pages at the wire level. §5.1: "a three
+     * character <CRC> is appended to the data before the <CR><LF>.
+     * The CRC must be present." — verified on every page. */
     uint16_t total = 0;
-    for (uint8_t page = 0; total < mresp.value_count && page < 10; page++) {
-        sdi12_data_response_t dresp;
-        err = sdi12_master_get_data(timing_master(ctx), addr, page, crc, &dresp);
-
-        if (err == SDI12_ERR_CRC_MISMATCH) {
-            TEST_FAIL_MSG(*r, "CRC mismatch on D%d! page", page);
-            return true;
-        }
+    for (uint16_t page = 0; total < mresp.value_count && page < 1000; page++) {
+        char cmd[8];
+        snprintf(cmd, sizeof(cmd), "%cD%u!", addr, page);
+        err = sdi12_master_transact(timing_master(ctx), cmd,
+                                    SDI12_RESPONSE_TIMEOUT_MS);
         if (err != SDI12_OK) {
-            TEST_FAIL_MSG(*r, "D%d! failed: error %d", page, err);
+            TEST_FAIL_MSG(*r, "D%u! failed: error %d", page, err);
             return true;
         }
-        if (dresp.value_count == 0) {
-            /* Empty page — no more data */
-            break;
+
+        sdi12_master_ctx_t *m = timing_master(ctx);
+        size_t len = m->resp_len;
+        while (len > 0 && (m->resp_buf[len - 1] == '\r' ||
+                           m->resp_buf[len - 1] == '\n'))
+            len--;
+
+        if (len < 1 || m->resp_buf[0] != addr) {
+            TEST_FAIL_MSG(*r, "D%u! response from wrong address", page);
+            return true;
         }
-        total += dresp.value_count;
+        if (len == 1)
+            break;  /* bare address — no more data */
+
+        if (!sdi12_crc_verify(m->resp_buf, len)) {
+            TEST_FAIL_MSG(*r, "D%u! page lacks the mandatory CRC "
+                          "(\xc2\xa7" "5.1: \"The CRC must be present\")",
+                          page);
+            return true;
+        }
+
+        /* Strip address + 3 CRC chars, parse the values field */
+        sdi12_value_t vals[SDI12_MAX_VALUES];
+        uint8_t n = 0;
+        sdi12_master_parse_data_values(m->resp_buf + 1, len - 1 - 3,
+                                       vals, SDI12_MAX_VALUES, &n, false);
+        if (n == 0)
+            break;
+        total += n;
     }
 
     if (total != mresp.value_count) {
-        TEST_FAIL_MSG(*r, "Value count mismatch: H%s said %d, D pages gave %d",
-                      crc ? "AC" : "A", mresp.value_count, total);
+        TEST_FAIL_MSG(*r, "Value count mismatch: HA said %d, D pages gave %d",
+                      mresp.value_count, total);
         return true;
     }
 
-    TEST_PASS_MSG(*r, "ttt=%d, nnn=%d, %d values across D pages%s",
-                  mresp.wait_seconds, mresp.value_count, total,
-                  crc ? " (CRC OK)" : "");
+    TEST_PASS_MSG(*r, "ttt=%d, nnn=%d, %d values across D pages (CRC verified)",
+                  mresp.wait_seconds, mresp.value_count, total);
     return true;
 }
 
 static test_result_t test_hv_ascii(timing_ctx_t *ctx, char addr) {
     test_result_t r = TEST_RESULT("High-Volume ASCII (aHA!)", "\xc2\xa7" "5.1");
-    hv_ascii_cycle(ctx, addr, false, &r);
+    hv_ascii_cycle(ctx, addr, &r);
     return r;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
- *  24. High-Volume ASCII + CRC (aHAC!)
- *  §4.4.13 + §4.4.12 — HV ASCII with CRC-16 on D responses
+ *  24. Identify-Parameter CRC Polarity
+ *  §6.2 Table 20 — CRC only for the MC/CC/RC/HA/HB families
  * ══════════════════════════════════════════════════════════════════════ */
 
-static test_result_t test_hv_ascii_crc(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("High-Volume ASCII + CRC (aHAC!)", "\xc2\xa7" "5.1/4.4.12");
-    hv_ascii_cycle(ctx, addr, true, &r);
+static test_result_t test_ident_param_crc(timing_ctx_t *ctx, char addr) {
+    test_result_t r = TEST_RESULT("Identify-Param CRC Polarity",
+                                  "\xc2\xa7" "6.2");
+    sdi12_master_ctx_t *m = timing_master(ctx);
+    char cmd[16];
+
+    /* aIC_001! — Table 20: no CRC in the response */
+    snprintf(cmd, sizeof(cmd), "%cIC_001!", addr);
+    sdi12_err_t err = sdi12_master_transact(m, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not answer aIC_001!");
+        return r;
+    }
+    if (err == SDI12_OK) {
+        size_t len = m->resp_len;
+        while (len > 0 && (m->resp_buf[len - 1] == '\r' ||
+                           m->resp_buf[len - 1] == '\n'))
+            len--;
+        if (len > 1 && m->resp_buf[len - 1] != ';') {
+            TEST_FAIL_MSG(r, "aIC_001! response carries a CRC — Table 20 "
+                          "shows none for the aIC_nnn! family");
+            return r;
+        }
+    }
+
+    /* aIHA_001! — Table 20: CRC required */
+    sdi12_master_send_break(m);
+    snprintf(cmd, sizeof(cmd), "%cIHA_001!", addr);
+    err = sdi12_master_transact(m, cmd, SDI12_RESPONSE_TIMEOUT_MS);
+    if (err == SDI12_ERR_TIMEOUT) {
+        TEST_SKIP_MSG(r, "Sensor does not answer aIHA_001!");
+        return r;
+    }
+    if (err == SDI12_OK) {
+        size_t len = m->resp_len;
+        while (len > 0 && (m->resp_buf[len - 1] == '\r' ||
+                           m->resp_buf[len - 1] == '\n'))
+            len--;
+        if (len > 1 && !sdi12_crc_verify(m->resp_buf, len)) {
+            TEST_FAIL_MSG(r, "aIHA_001! response lacks the CRC that "
+                          "Table 20 requires for the aIHA_nnn! family");
+            return r;
+        }
+    }
+
+    TEST_PASS_MSG(r, "aIC_nnn! plain, aIHA_nnn! CRC-protected — per Table 20");
     return r;
 }
 
@@ -1473,16 +1539,6 @@ static test_result_t test_continuous_groups(timing_ctx_t *ctx, char addr) {
     return r;
 }
 
-/* ══════════════════════════════════════════════════════════════════════
- *  31. High-Volume Binary + CRC (aHBC!)
- *  §5.2 — Binary data via aDBn! (CRC is always present in binary packets)
- * ══════════════════════════════════════════════════════════════════════ */
-
-static test_result_t test_hv_binary_crc(timing_ctx_t *ctx, char addr) {
-    test_result_t r = TEST_RESULT("High-Volume Binary + CRC (aHBC!)", "\xc2\xa7" "5.2");
-    hv_binary_cycle(ctx, addr, true, &r);
-    return r;
-}
 
 /* ══════════════════════════════════════════════════════════════════════
  *  Registration
@@ -1516,8 +1572,7 @@ void sensor_tests_register(test_suite_t *suite) {
     test_suite_add(suite, "bus_scan",       "Full Bus Scan (62 addresses)",    "\xc2\xa7" "4.3",    test_bus_scan);
     test_suite_add(suite, "resp_compliance","Response Compliance",             "\xc2\xa7" "4.3/4.4",  test_response_compliance);
     test_suite_add(suite, "hv_ascii",       "High-Volume ASCII (aHA!)",        "\xc2\xa7" "5.1",   test_hv_ascii);
-    test_suite_add(suite, "hv_ascii_crc",   "High-Volume ASCII+CRC (aHAC!)",   "\xc2\xa7" "5.1/4.4.12",test_hv_ascii_crc);
     test_suite_add(suite, "hv_binary",      "High-Volume Binary (aHB!)",       "\xc2\xa7" "5.2",      test_hv_binary);
-    test_suite_add(suite, "hv_binary_crc",  "High-Volume Binary+CRC (aHBC!)",  "\xc2\xa7" "5.2",      test_hv_binary_crc);
     test_suite_add(suite, "identify_meas",  "Identify Measurement (aIM!)",     "\xc2\xa7" "6.1",   test_identify_measurement);
+    test_suite_add(suite, "ident_param_crc","Identify-Param CRC Polarity",     "\xc2\xa7" "6.2",   test_ident_param_crc);
 }

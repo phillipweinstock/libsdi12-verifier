@@ -104,7 +104,15 @@ typedef struct {
     /* True while the command being processed is an aDBn! request —
      * lets the response path identify binary packets for fault rewrites */
     bool               cmd_is_db;
+
+    /* LB_FAULT_PACED_UART state: byte release schedule for the
+     * response currently in the ring */
+    bool               pace_active;
+    uint64_t           pace_start_us;
+    size_t             pace_released;
 } loopback_priv_t;
+
+#define LB_PACE_US_PER_BYTE 2000  /* 2 ms per byte while paced */
 
 /* ── Sensor Callbacks ─────────────────────────────────────────── */
 
@@ -272,6 +280,40 @@ static void lb_flush(hal_t *self) {
 
 static size_t lb_read(hal_t *self, char *buf, size_t max, uint32_t timeout_ms) {
     loopback_priv_t *p = (loopback_priv_t *)self->priv;
+
+    /* Paced-UART fault: release response bytes on a fixed schedule so
+     * the master's recv layer experiences line-rate delivery instead of
+     * an instantaneous burst. */
+    if (p->faults & LB_FAULT_PACED_UART) {
+        size_t avail = lb_ring_avail(&p->resp);
+        if (avail == 0) {
+            p->pace_active = false;
+        } else {
+            if (!p->pace_active) {
+                p->pace_active   = true;
+                p->pace_start_us = self->micros(self);
+                p->pace_released = 0;
+            }
+            uint64_t elapsed = self->micros(self) - p->pace_start_us;
+            size_t allowed = (size_t)(elapsed / LB_PACE_US_PER_BYTE) + 1;
+            size_t budget  = allowed > p->pace_released
+                             ? allowed - p->pace_released : 0;
+            if (budget == 0) {
+#ifdef _WIN32
+                Sleep(1);
+#else
+                usleep(1000);
+#endif
+                return 0;
+            }
+            if (max > budget) max = budget;
+            size_t got = lb_ring_get(&p->resp, buf, max);
+            p->pace_released += got;
+            if (lb_ring_avail(&p->resp) == 0)
+                p->pace_active = false;
+            return got;
+        }
+    }
 
     size_t n = lb_ring_get(&p->resp, buf, max);
 

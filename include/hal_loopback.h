@@ -36,6 +36,14 @@ typedef enum {
      *  buf[1], return count excludes any type prefix). If library code
      *  and documentation disagree, packets mis-frame on the wire. */
     LB_FAULT_DOC_CONTRACT_BIN = 1u << 2,
+
+    /** Sensor responses arrive paced at ~2 ms per byte instead of
+     *  instantaneously — a mild stand-in for a real 1200-baud line
+     *  (8.33 ms per character). Any recv implementation that treats
+     *  its timeout as a total-read deadline truncates every response;
+     *  the correct contract is timeout-to-first-byte, then read to LF
+     *  with an inter-character timeout. */
+    LB_FAULT_PACED_UART       = 1u << 3,
 } lb_fault_t;
 
 /** Set the active fault mask on a loopback HAL (LB_FAULT_NONE clears). */

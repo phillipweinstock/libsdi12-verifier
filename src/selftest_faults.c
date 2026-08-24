@@ -313,6 +313,45 @@ static test_result_t test_fault_bin_doc_contract(timing_ctx_t *ctx, char addr)
     return r;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ *  F5. Line-rate response delivery must not truncate reads
+ *  Exposes: recv layer treating its timeout as a total-read deadline
+ * ══════════════════════════════════════════════════════════════════════ */
+static test_result_t test_fault_paced_uart(timing_ctx_t *ctx, char addr)
+{
+    test_result_t r = TEST_RESULT("Paced-UART Response Delivery",
+                                  SECT_SELFTEST);
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_PACED_UART);
+
+    /* aI! has the longest fixed-format response (>= 20 chars). Paced at
+     * ~2 ms/byte it takes ~50 ms of line time — like a real 1200-baud
+     * bus, where 8.33 ms/char puts even "a<CR><LF>" past a 15 ms total
+     * deadline. The 15 ms response timeout is time-to-FIRST-byte
+     * (spec 4.0); a recv that stops reading at that deadline truncates
+     * every response. */
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_ident_t ident;
+    memset(&ident, 0, sizeof(ident));
+    sdi12_err_t err = sdi12_master_identify(timing_master(ctx), addr, &ident);
+
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "aI! failed with error %d at line-rate delivery — "
+                      "recv deadline cuts the response short", err);
+        return r;
+    }
+    if (memcmp(ident.vendor, "LOOPBAK ", 8) != 0) {
+        TEST_FAIL_MSG(r, "aI! returned corrupted identity \"%.8s\" — "
+                      "response truncated mid-read", ident.vendor);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "Full aI! response received at line-rate delivery");
+    return r;
+}
+
 /* ══════════════════════════════════════════════════════════════════════ */
 
 void selftest_fault_tests_register(test_suite_t *suite)
@@ -329,4 +368,7 @@ void selftest_fault_tests_register(test_suite_t *suite)
     test_suite_add(suite, "fault_bin_doc",
                    "Binary Formatter Documented Contract", SECT_SELFTEST,
                    test_fault_bin_doc_contract);
+    test_suite_add(suite, "fault_paced",
+                   "Paced-UART Response Delivery", SECT_SELFTEST,
+                   test_fault_paced_uart);
 }
