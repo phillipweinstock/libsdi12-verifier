@@ -79,12 +79,6 @@ static void sim_send_response(const char *data, size_t len, void *user_data) {
         s->hal->set_rts(s->hal, false);
 }
 
-static void sim_set_direction(sdi12_dir_t dir, void *user_data) {
-    rec_sim_t *s = (rec_sim_t *)user_data;
-    if (s->use_rts)
-        s->hal->set_rts(s->hal, dir == SDI12_DIR_TX);
-}
-
 static sdi12_value_t sim_read_param(uint8_t param_index, void *user_data) {
     (void)user_data;
     sdi12_value_t v;
@@ -347,7 +341,6 @@ static int sim_init_ex(rec_sim_t *s, timing_ctx_t *timing_ctx, char addr,
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
     cb.send_response     = sim_send_response;
-    cb.set_direction     = sim_set_direction;
     cb.read_param        = sim_read_param;
     cb.start_measurement = (ttt > 0) ? sim_start_measurement : NULL;
     cb.service_request   = (ttt > 0) ? sim_service_request   : NULL;

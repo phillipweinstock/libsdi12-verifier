@@ -131,11 +131,6 @@ static void lb_send_response(const char *data, size_t len, void *user_data) {
     lb_ring_put(&p->resp, data, len);
 }
 
-static void lb_set_direction(sdi12_dir_t dir, void *user_data) {
-    (void)dir;
-    (void)user_data;
-}
-
 static sdi12_value_t lb_read_param(uint8_t idx, void *user_data) {
     loopback_priv_t *p = (loopback_priv_t *)user_data;
     sdi12_value_t v;
@@ -223,7 +218,6 @@ static int lb_open(hal_t *self, const hal_serial_config_t *cfg) {
     sdi12_sensor_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
     cb.send_response = lb_send_response;
-    cb.set_direction = lb_set_direction;
     cb.read_param    = lb_read_param;
     cb.format_binary_page = lb_format_binary_page;
     cb.user_data     = p;
