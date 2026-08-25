@@ -436,6 +436,120 @@ static test_result_t test_fault_crc_vectors(timing_ctx_t *ctx, char addr)
     return r;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ *  F9. Master HV API must accept the spec's empty terminator page
+ *  Exposes: get_hv_data trimming CR/LF before the raw-length CRC guard
+ * ══════════════════════════════════════════════════════════════════════ */
+static test_result_t test_fault_hv_terminator(timing_ctx_t *ctx, char addr)
+{
+    test_result_t r = TEST_RESULT("HV Terminator Page via Master API",
+                                  SECT_SELFTEST);
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_ASCII, 0, false, &mresp);
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "HA command failed with error %d", err);
+        return r;
+    }
+
+    /* Page through sdi12_master_get_hv_data (the documented paginate-
+     * until-empty pattern) — the terminating page is a<CRC><CR><LF>
+     * (§5.1 empty page, e.g. 0AP@) and must come back as OK with
+     * raw_len == 0, not as a CRC error. */
+    uint16_t total = 0;
+    for (uint16_t page = 0; page < 1000; page++) {
+        char raw[96];
+        size_t raw_len = sizeof(raw);
+        err = sdi12_master_get_hv_data(timing_master(ctx), addr, page,
+                                       raw, &raw_len);
+        if (err != SDI12_OK) {
+            TEST_FAIL_MSG(r, "D%u! failed with error %d — the compliant "
+                          "empty terminator page must not be an error",
+                          page, err);
+            return r;
+        }
+        if (raw_len == 0)
+            break;  /* clean end-of-data */
+
+        sdi12_value_t vals[SDI12_MAX_VALUES];
+        uint8_t n = 0;
+        sdi12_master_parse_data_values(raw, raw_len, vals,
+                                       SDI12_MAX_VALUES, &n, false);
+        if (n == 0) break;
+        total += n;
+    }
+
+    if (total != mresp.value_count) {
+        TEST_FAIL_MSG(r, "HA promised %d values, pages delivered %d",
+                      mresp.value_count, total);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "%d values plus a clean empty-terminator page", total);
+    return r;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  F10. Binary payload must never be silently truncated under a valid CRC
+ *  Exposes: dishonest buflen handed to format_binary_page + clamp
+ * ══════════════════════════════════════════════════════════════════════ */
+static test_result_t test_fault_fat_binary(timing_ctx_t *ctx, char addr)
+{
+    test_result_t r = TEST_RESULT("Binary Payload Fills Documented Buffer",
+                                  SECT_SELFTEST);
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_FAT_BINARY);
+
+    sdi12_master_send_break(timing_master(ctx));
+
+    sdi12_meas_response_t mresp;
+    sdi12_err_t err = sdi12_master_start_measurement(
+        timing_master(ctx), addr, SDI12_MEAS_HIGHVOL_BINARY, 0, false, &mresp);
+    if (err != SDI12_OK) {
+        hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
+        TEST_FAIL_MSG(r, "HB command failed with error %d", err);
+        return r;
+    }
+
+    timing_set_binary_recv(ctx, true);
+
+    sdi12_bintype_t btype;
+    uint8_t payload[SDI12_BIN_MAX_PAYLOAD];
+    size_t out_len = sizeof(payload);
+    err = sdi12_master_get_hv_binary_data(
+        timing_master(ctx), addr, 0, &btype, payload, &out_len);
+
+    timing_set_binary_recv(ctx, false);
+    hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
+
+    if (err != SDI12_OK) {
+        TEST_FAIL_MSG(r, "DB0! failed with error %d", err);
+        return r;
+    }
+    if (out_len < 2) {
+        TEST_FAIL_MSG(r, "DB0! delivered %zu bytes — too short to check",
+                      out_len);
+        return r;
+    }
+
+    /* The callback embedded the payload length it actually wrote in
+     * payload[0..1]. If the library truncated after the fact, the
+     * packet still CRC-verifies — only this check can see the loss. */
+    size_t written = (size_t)payload[0] | ((size_t)payload[1] << 8);
+    if (written != out_len) {
+        TEST_FAIL_MSG(r, "Callback wrote %zu payload bytes per its "
+                      "documented buflen, wire delivered %zu — silent "
+                      "truncation under a valid CRC", written, out_len);
+        return r;
+    }
+
+    TEST_PASS_MSG(r, "%zu payload bytes written == %zu delivered",
+                  written, out_len);
+    return r;
+}
+
 /* ══════════════════════════════════════════════════════════════════════ */
 
 void selftest_fault_tests_register(test_suite_t *suite)
@@ -461,4 +575,10 @@ void selftest_fault_tests_register(test_suite_t *suite)
     test_suite_add(suite, "fault_crc_vectors",
                    "Spec CRC Worked Examples", SECT_SELFTEST,
                    test_fault_crc_vectors);
+    test_suite_add(suite, "fault_hv_term",
+                   "HV Terminator Page via Master API", SECT_SELFTEST,
+                   test_fault_hv_terminator);
+    test_suite_add(suite, "fault_fat_bin",
+                   "Binary Payload Fills Documented Buffer", SECT_SELFTEST,
+                   test_fault_fat_binary);
 }

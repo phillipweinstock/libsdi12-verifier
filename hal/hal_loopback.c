@@ -192,7 +192,24 @@ static size_t lb_format_binary_page(uint16_t page,
                                      uint8_t count,
                                      char *buf, size_t buflen,
                                      void *user_data) {
-    (void)user_data;
+    loopback_priv_t *pv = (loopback_priv_t *)user_data;
+
+    /* Fat-binary fault: write exactly as much as the documented
+     * contract permits — type byte at buf[1] plus payload filling the
+     * rest — and embed the payload length in payload[0..1] (LE) so the
+     * verifier can detect silent truncation downstream. */
+    if (pv && (pv->faults & LB_FAULT_FAT_BINARY)) {
+        if (page > 0) return 0;
+        if (buflen < 5) return 0;
+        size_t payload = buflen - 2;          /* buf[1]=type, rest payload */
+        buf[1] = (char)SDI12_BINTYPE_UINT8;
+        buf[2] = (char)(payload & 0xFF);
+        buf[3] = (char)((payload >> 8) & 0xFF);
+        for (size_t i = 4; i < 2 + payload; i++)
+            buf[i] = (char)(0x20 + (i & 0x3F));
+        return 1 + payload;
+    }
+
     if (page > 0) return 0;  /* all values fit on page 0 */
 
     /* buf[0] = address (already set by library)

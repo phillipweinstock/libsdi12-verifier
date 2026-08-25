@@ -50,6 +50,14 @@ typedef enum {
      *  decimals=6). A formatter that truncates instead of reducing
      *  precision emits grammar-invalid output such as "+9999999.". */
     LB_FAULT_OVERWIDE_VALUE   = 1u << 5,
+
+    /** format_binary_page fills the entire buffer its documented
+     *  contract allows (type byte + payload up to buflen-1 from buf[1])
+     *  and embeds the payload length it wrote in the first two payload
+     *  bytes. If the library hands the callback a dishonest buflen and
+     *  then clamps, the packet is silently truncated yet carries a
+     *  VALID CRC — the embedded length exposes the loss. */
+    LB_FAULT_FAT_BINARY       = 1u << 6,
 } lb_fault_t;
 
 /** Set the active fault mask on a loopback HAL (LB_FAULT_NONE clears). */
