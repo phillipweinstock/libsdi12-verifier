@@ -6,7 +6,7 @@
 #define VERIFIER_H
 
 /** Tool version — single source for CLI banner and report output. */
-#define VERIFIER_VERSION "0.8.0"
+#define VERIFIER_VERSION "0.9.0"
 
 #include "hal.h"
 #include "timing.h"

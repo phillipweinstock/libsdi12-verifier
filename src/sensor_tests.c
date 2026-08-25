@@ -242,7 +242,7 @@ static test_result_t test_interchar_gap(timing_ctx_t *ctx, char addr) {
     }
 
     r.measured_us   = timing_max_interchar_gap_us(ctx);
-    r.spec_limit_us = SDI12_INTERCHAR_MAX_MS * 1000;
+    r.spec_limit_us = SDI12_INTERCHAR_MAX_US;  /* 1.66 ms, no tolerance */
 
     if (r.measured_us > r.spec_limit_us) {
         TEST_FAIL_MSG(r, "Max gap %.3f ms exceeds %.3f ms limit",
@@ -1022,7 +1022,6 @@ static test_result_t test_response_compliance(timing_ctx_t *ctx, char addr) {
     static const char *optional_bodies[] = {
         "C!",      /* concurrent      */
         "R0!",     /* continuous       */
-        "V!",      /* verify           */
         "MC!",     /* M with CRC       */
         "CC!",     /* C with CRC       */
         "RC0!",    /* R with CRC       */
@@ -1284,7 +1283,7 @@ static test_result_t test_ident_param_crc(timing_ctx_t *ctx, char addr) {
 /**
  * Helper: run a full HV binary measurement cycle.
  *
- * Sends aHB! → waits for service request → fetches binary data
+ * Sends aHB! (the spec defines no aHBC! variant) and fetches binary
  * pages via aDBn! per §5.2.  Each binary packet is verified for:
  *   - 16-bit CRC (always present in binary packets)
  *   - Valid binary type code

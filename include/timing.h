@@ -46,6 +46,7 @@ typedef struct {
     size_t              byte_count;
 
     /* Per-line timestamps (multi-line extended response support) */
+    uint64_t            line_start_us[TIMING_MAX_LINES];
     uint64_t            line_end_us[TIMING_MAX_LINES];
     uint8_t             line_count;
 

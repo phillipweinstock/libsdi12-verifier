@@ -36,6 +36,7 @@ typedef struct {
     bool                use_rts;
 
     /* Captured bus events for analysis */
+    bool                break_seen;
     uint64_t            break_start_us;
     uint64_t            break_end_us;
     uint64_t            marking_end_us;
@@ -162,96 +163,113 @@ static bool sim_poll_measurement(rec_sim_t *s)
 /* ── Bus RX helpers — listen for recorder commands ────────────── */
 
 /**
- * Wait for a break signal from the recorder.
- * Measures the break duration for compliance checking.
+ * Core RX: wait for the next complete command, with or without a
+ * preceding break. §7.0 explicitly permits a command with NO break
+ * within 87 ms of marking (the canonical case: D0! straight after a
+ * service request) — a sim that insists on a break before every
+ * command byte-eats those commands and false-fails the most compliant
+ * recorders.
  *
- * A break is a continuous spacing condition (logical 0 / line held low)
- * for >= 12ms.  At 1200 baud, one byte takes ~8.33ms, so a sustained
- * spacing > 12ms is detected as a break.  We detect this via a framing
- * error / null byte pattern from the UART, or a long idle gap.
+ * NUL bytes are treated as break framing errors: they set break_seen
+ * and reset any partial command. Non-NUL bytes accumulate into
+ * last_cmd until '!' completes it. Accumulation CONTINUES across
+ * calls (buffers are reset by the callers via rx_reset), so a short
+ * polling window cannot lose half a command.
  *
- * Returns: microseconds of the break, or 0 on timeout.
+ * Returns true when a complete '!'-terminated command is in last_cmd.
  */
-static uint64_t wait_for_break(rec_sim_t *s, uint32_t timeout_ms) {
+static bool wait_for_command(rec_sim_t *s, uint32_t timeout_ms) {
     uint64_t deadline = s->hal->micros(s->hal) + (uint64_t)timeout_ms * 1000;
     char c;
-    uint64_t idle_start = 0;
 
-    /* Consume any prior data, then detect sustained idle (break) */
     while (s->hal->micros(s->hal) < deadline) {
-        size_t n = s->hal->read(s->hal, &c, 1, 1);
-        if (n == 0) {
-            if (idle_start == 0)
-                idle_start = s->hal->micros(s->hal);
-        } else {
-            /* Got a byte — if it's a null (break char), measure it */
-            if (c == '\0') {
-                s->break_start_us = s->hal->micros(s->hal);
-                /* Keep reading nulls while break continues */
-                while (s->hal->micros(s->hal) < deadline) {
-                    n = s->hal->read(s->hal, &c, 1, 2);
-                    if (n == 0 || c != '\0') {
-                        s->break_end_us = s->hal->micros(s->hal);
-                        s->marking_end_us = 0;
+        if (s->last_cmd_len > 0 && s->last_cmd[s->last_cmd_len - 1] == '!') {
+            s->last_cmd[s->last_cmd_len] = '\0';
+            s->last_cmd_us = s->cmd_byte_times[s->cmd_byte_count > 0 ?
+                                               s->cmd_byte_count - 1 : 0];
+            return true;
+        }
+        if (s->last_cmd_len >= sizeof(s->last_cmd) - 1) {
+            s->last_cmd_len = 0;     /* runaway garbage — resync */
+            s->cmd_byte_count = 0;
+        }
 
-                        /* Now wait for the marking period to end (next real char) */
-                        uint64_t mark_deadline = s->hal->micros(s->hal) + 20000;
-                        while (s->hal->micros(s->hal) < mark_deadline) {
-                            n = s->hal->read(s->hal, &c, 1, 1);
-                            if (n == 1 && c != '\0') {
-                                s->marking_end_us = s->hal->micros(s->hal);
-                                /* Put this byte back into our command buffer */
-                                s->cmd_byte_times[0] = s->marking_end_us;
-                                s->last_cmd[0] = c;
-                                s->cmd_byte_count = 1;
-                                s->last_cmd_len = 1;
-                                return s->break_end_us - s->break_start_us;
-                            }
-                        }
-                        return s->break_end_us - s->break_start_us;
-                    }
-                }
+        size_t n = s->hal->read(s->hal, &c, 1, 1);
+        if (n == 0)
+            continue;
+
+        uint64_t now = s->hal->micros(s->hal);
+
+        if (c == '\0') {
+            /* Break burst: first NUL stamps the start, consume the rest */
+            s->break_seen     = true;
+            s->break_start_us = now;
+            while (s->hal->micros(s->hal) < deadline) {
+                n = s->hal->read(s->hal, &c, 1, 2);
+                if (n == 0 || c != '\0') break;
             }
-            idle_start = 0;
+            s->break_end_us   = s->hal->micros(s->hal);
+            s->marking_end_us = 0;
+            s->last_cmd_len   = 0;    /* break invalidates partial cmd */
+            s->cmd_byte_count = 0;
+            if (n == 1 && c != '\0') {
+                /* The byte that ended the NUL run is the command's
+                 * first character */
+                s->marking_end_us = s->break_end_us;
+                s->cmd_byte_times[s->cmd_byte_count++] = s->break_end_us;
+                s->last_cmd[s->last_cmd_len++] = c;
+            }
+            continue;
+        }
+
+        if (s->last_cmd_len == 0 && s->break_seen && s->marking_end_us == 0)
+            s->marking_end_us = now;
+
+        if (s->cmd_byte_count < 32)
+            s->cmd_byte_times[s->cmd_byte_count++] = now;
+        s->last_cmd[s->last_cmd_len++] = c;
+    }
+
+    if (s->last_cmd_len > 0)
+        s->last_cmd[s->last_cmd_len] = '\0';
+    return s->last_cmd_len > 0 && s->last_cmd[s->last_cmd_len - 1] == '!';
+}
+
+/** Reset the RX accumulation state before waiting for a fresh command. */
+static void rx_reset(rec_sim_t *s) {
+    s->cmd_byte_count = 0;
+    s->last_cmd_len   = 0;
+    s->break_seen     = false;
+    memset(s->last_cmd, 0, sizeof(s->last_cmd));
+}
+
+/**
+ * Compat wrapper: wait until a command PRECEDED BY A BREAK has fully
+ * arrived; returns the measured break duration (0 on timeout). Used by
+ * the break/marking measurement tests, which specifically need one.
+ */
+static uint64_t wait_for_break(rec_sim_t *s, uint32_t timeout_ms) {
+    rx_reset(s);
+    uint64_t deadline = s->hal->micros(s->hal) + (uint64_t)timeout_ms * 1000;
+    while (s->hal->micros(s->hal) < deadline) {
+        bool complete = wait_for_command(s, 100);
+        if (s->break_seen)
+            return s->break_end_us - s->break_start_us;
+        if (complete) {
+            /* A break-less command — legal on the wire, but this caller
+             * wants a break measurement: discard and keep waiting */
+            rx_reset(s);
         }
     }
     return 0;
 }
 
 /**
- * Read a complete command from the recorder (up to '!' terminator).
- * Records per-byte timestamps for inter-character gap analysis.
- * Assumes first byte may already be in the buffer from break detection.
+ * Compat wrapper: the command is normally already complete after
+ * wait_for_command/wait_for_break; finish accumulating if not.
  */
 static bool read_command(rec_sim_t *s, uint32_t timeout_ms) {
-    uint64_t deadline = s->hal->micros(s->hal) + (uint64_t)timeout_ms * 1000;
-
-    /* Continue from where break detection left off */
-    while (s->hal->micros(s->hal) < deadline) {
-        /* Check if we already have a complete command */
-        if (s->last_cmd_len > 0 && s->last_cmd[s->last_cmd_len - 1] == '!') {
-            s->last_cmd[s->last_cmd_len] = '\0';
-            s->last_cmd_us = s->cmd_byte_times[s->cmd_byte_count - 1];
-            return true;
-        }
-
-        if (s->last_cmd_len >= sizeof(s->last_cmd) - 1)
-            break;
-
-        char c;
-        size_t n = s->hal->read(s->hal, &c, 1, 1);
-        if (n == 1) {
-            uint64_t now = s->hal->micros(s->hal);
-            if (s->cmd_byte_count < 32)
-                s->cmd_byte_times[s->cmd_byte_count++] = now;
-            s->last_cmd[s->last_cmd_len++] = c;
-        }
-    }
-
-    if (s->last_cmd_len > 0)
-        s->last_cmd[s->last_cmd_len] = '\0';
-
-    return s->last_cmd_len > 0 && s->last_cmd[s->last_cmd_len - 1] == '!';
+    return wait_for_command(s, timeout_ms);
 }
 
 /**
@@ -263,22 +281,18 @@ static bool read_command(rec_sim_t *s, uint32_t timeout_ms) {
  * service request is emitted at the right time.
  */
 static bool wait_and_respond(rec_sim_t *s, uint32_t timeout_ms) {
-    s->cmd_byte_count = 0;
-    s->last_cmd_len = 0;
-    memset(s->last_cmd, 0, sizeof(s->last_cmd));
+    rx_reset(s);
 
     /* Poll for measurement completion before listening for commands */
     sim_poll_measurement(s);
 
-    uint64_t brk = wait_for_break(s, timeout_ms);
-    if (brk == 0)
+    /* Accept the command with OR without a preceding break (§7.0:
+     * no break needed within 87 ms of marking) */
+    if (!wait_for_command(s, timeout_ms))
         return false;
 
-    /* Notify sensor of break */
-    sdi12_sensor_break(&s->sensor);
-
-    if (!read_command(s, 500))
-        return false;
+    if (s->break_seen)
+        sdi12_sensor_break(&s->sensor);
 
     /* Process through sensor — will auto-respond via callback */
     sdi12_sensor_process(&s->sensor, s->last_cmd, s->last_cmd_len - 1);
@@ -292,27 +306,24 @@ static bool wait_and_respond(rec_sim_t *s, uint32_t timeout_ms) {
  * request fires at the right instant.
  */
 static bool wait_and_respond_poll(rec_sim_t *s, uint32_t timeout_ms) {
-    s->cmd_byte_count = 0;
-    s->last_cmd_len = 0;
-    memset(s->last_cmd, 0, sizeof(s->last_cmd));
+    rx_reset(s);
 
-    /* Keep polling until break detected or timeout */
+    /* Keep polling until a complete command arrives or timeout.
+     * wait_for_command accumulates across calls, so the short polling
+     * window cannot split a command; breaks remain optional. */
     uint64_t deadline = s->hal->micros(s->hal) + (uint64_t)timeout_ms * 1000;
-    uint64_t brk = 0;
+    bool complete = false;
 
     while (s->hal->micros(s->hal) < deadline) {
         sim_poll_measurement(s);
-        brk = wait_for_break(s, 50);   /* Short poll interval */
-        if (brk > 0) break;
+        if (wait_for_command(s, 50)) { complete = true; break; }
     }
 
-    if (brk == 0)
+    if (!complete)
         return false;
 
-    sdi12_sensor_break(&s->sensor);
-
-    if (!read_command(s, 500))
-        return false;
+    if (s->break_seen)
+        sdi12_sensor_break(&s->sensor);
 
     sdi12_sensor_process(&s->sensor, s->last_cmd, s->last_cmd_len - 1);
     return true;
@@ -449,7 +460,12 @@ static test_result_t test_rec_marking(timing_ctx_t *ctx, char addr) {
         return r;
     }
 
-    uint64_t marking_us = g_sim.marking_end_us - g_sim.break_end_us;
+    /* marking_end is the READ-COMPLETION time of the first command
+     * byte, which includes that byte's own ~8.33 ms on the wire —
+     * subtract it, or the check can never fail (measured marking would
+     * always be true marking + 8.33 ms). */
+    uint64_t raw_us = g_sim.marking_end_us - g_sim.break_end_us;
+    uint64_t marking_us = raw_us > 8333 ? raw_us - 8333 : 0;
     r.measured_us   = marking_us;
     /* §7.0: 8.33 ms with a -0.40 ms tolerance — the minimum is
      * 7.93 ms. SDI12_MARK_AFTER_BREAK_MS (9) is rounded UP for use as
@@ -1150,8 +1166,16 @@ static test_result_t test_rec_addr_change(timing_ctx_t *ctx, char addr) {
     }
 
     /* Verify the sensor responded with the new address */
-    if (g_sim.last_response_len > 0 && g_sim.last_response[0] == new_addr) {
-        TEST_PASS_MSG(r, "Address changed '%c' -> '%c'", addr, new_addr);
+    bool ok = (g_sim.last_response_len > 0 &&
+               g_sim.last_response[0] == new_addr);
+
+    /* Put the sim back at its original address so the rest of the
+     * session (and the live recorder's model of the bus) stays sane */
+    g_sim.sensor.address = addr;
+
+    if (ok) {
+        TEST_PASS_MSG(r, "Address changed '%c' -> '%c' (sim restored)",
+                      addr, new_addr);
     } else {
         TEST_FAIL_MSG(r, "Response address mismatch after change");
     }

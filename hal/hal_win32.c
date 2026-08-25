@@ -63,6 +63,13 @@ static int win32_open(hal_t *self, const hal_serial_config_t *cfg) {
     dcb.fOutX = FALSE;
     dcb.fInX  = FALSE;
 
+    /* Force flags a previous app may have left set: fNull would
+     * silently drop the NUL bytes recorder-mode break detection relies
+     * on; fAbortOnError would freeze the port at the first framing
+     * error (i.e. at the first break). */
+    dcb.fNull         = FALSE;
+    dcb.fAbortOnError = FALSE;
+
     if (!SetCommState(p->hComm, &dcb)) {
         fprintf(stderr, "Error: SetCommState failed (%lu)\n", GetLastError());
         CloseHandle(p->hComm);

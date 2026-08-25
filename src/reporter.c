@@ -158,9 +158,16 @@ void report_print_text(const report_t *rpt, FILE *out) {
             fail > 0 ? (c ? ANSI_RED : "") : "", fail, rst,
             skip > 0 ? (c ? ANSI_YELLOW : "") : "", skip, rst,
             error > 0 ? (c ? ANSI_MAGENTA : "") : "", error, rst);
-    fprintf(out, "  RESULT:  %s%s%s%s\n",
-            bld, result_color,
-            compliant ? "COMPLIANT" : "NON-COMPLIANT", rst);
+    if (compliant && skip > 0) {
+        /* A verdict must disclose what it did NOT check */
+        fprintf(out, "  RESULT:  %s%sCOMPLIANT%s (%zu test%s skipped - "
+                "not all protocol behavior was exercised)\n",
+                bld, result_color, rst, skip, skip == 1 ? "" : "s");
+    } else {
+        fprintf(out, "  RESULT:  %s%s%s%s\n",
+                bld, result_color,
+                compliant ? "COMPLIANT" : "NON-COMPLIANT", rst);
+    }
     fprintf(out, "================================================================\n");
 }
 

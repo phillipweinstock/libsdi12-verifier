@@ -6,7 +6,7 @@ Uses [libsdi12](https://github.com/phillipweinstock/libsdi12) under the hood.
 
 ## What it does
 
-- Runs **47 compliance tests** (31 sensor + 16 recorder) against the SDI-12 v1.4 spec — commands, timing, CRC, the lot; `--self-test` adds 7 fault-injection tests
+- Runs **47 compliance tests** (31 sensor + 16 recorder) against the SDI-12 v1.4 spec — commands, timing, CRC, the lot; `--self-test` adds 9 fault-injection tests
 - Tests both **sensors** (verifier acts as recorder) and **recorders** (verifier simulates a sensor)
 - Measures response timing down to the microsecond (response latency, inter-character gaps, break duration)
 - Outputs a compliance report as plain text or JSON, with references to the relevant spec sections

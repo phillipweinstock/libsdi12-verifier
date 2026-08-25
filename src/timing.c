@@ -59,8 +59,13 @@ static size_t cb_recv(char *buf, size_t max, uint32_t timeout_ms, void *user_dat
         uint64_t now = t->hal->micros(t->hal);
 
         if (n == 1) {
-            if (pos == 0)
+            if (pos == 0) {
                 t->resp_start_us = now;
+                /* First byte of this recv call = start of this line
+                 * (multi-line responses arrive one line per call) */
+                if (t->line_count < TIMING_MAX_LINES)
+                    t->line_start_us[t->line_count] = now;
+            }
 
             if (t->byte_count < TIMING_MAX_BYTES)
                 t->byte_times_us[t->byte_count++] = now;
@@ -174,9 +179,15 @@ uint64_t timing_max_interchar_gap_us(const timing_ctx_t *ctx) {
 }
 
 uint64_t timing_max_interline_gap_us(const timing_ctx_t *ctx) {
+    /* Gap = idle time between the END of line i-1 and the START of
+     * line i. Using end-to-end deltas would include line i's entire
+     * transmission time (~650 ms for a 75-char line at 1200 baud) and
+     * false-fail every compliant multi-line sensor against the 150 ms
+     * limit. */
     uint64_t max_gap = 0;
     for (uint8_t i = 1; i < ctx->line_count; i++) {
-        uint64_t gap = ctx->line_end_us[i] - ctx->line_end_us[i - 1];
+        if (ctx->line_start_us[i] <= ctx->line_end_us[i - 1]) continue;
+        uint64_t gap = ctx->line_start_us[i] - ctx->line_end_us[i - 1];
         if (gap > max_gap)
             max_gap = gap;
     }

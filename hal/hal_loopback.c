@@ -52,6 +52,8 @@ static size_t lb_ring_avail(const lb_ring_t *r) {
 
 static void lb_ring_put(lb_ring_t *r, const char *data, size_t len) {
     for (size_t i = 0; i < len; i++) {
+        /* Drop on full rather than lapping the tail */
+        if (lb_ring_avail(r) >= LB_RING_SIZE - 1) return;
         r->buf[r->head] = data[i];
         r->head = (r->head + 1) % LB_RING_SIZE;
     }
@@ -253,8 +255,16 @@ static int lb_open(hal_t *self, const hal_serial_config_t *cfg) {
         return -1;
 
     /* Register one parameter per simulated value in group 0 (M/C/R) */
-    for (int i = 0; i < LB_PARAM_COUNT; i++) {
-        sdi12_sensor_register_param(&p->sensor, 0, "TA", "C", 2);
+    {
+        /* Distinct SHEF codes/units so a wrong parameter index in the
+         * metadata handlers cannot pass unnoticed */
+        static const char *shef[LB_PARAM_COUNT] =
+            { "TA", "RH", "PA", "WS", "WD", "RA", "SR", "BV", "TW" };
+        static const char *unit[LB_PARAM_COUNT] =
+            { "C", "pct", "kPa", "m/s", "deg", "mm", "W/m2", "V", "C" };
+        for (int i = 0; i < LB_PARAM_COUNT; i++) {
+            sdi12_sensor_register_param(&p->sensor, 0, shef[i], unit[i], 2);
+        }
     }
 
     return 0;
