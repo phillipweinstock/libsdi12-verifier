@@ -179,10 +179,29 @@ static sdi12_value_t lb_read_param(uint8_t idx, void *user_data) {
         v.value    = LB_VALUES[idx];
         v.decimals = 2;
     } else {
-        v.value    = 0.0f;
-        v.decimals = 0;
+        /* Params registered in the extra groups (1 and 2). Deterministic
+         * and index-distinct so a wrong group/param mapping in the
+         * group battery cannot pass unnoticed. */
+        v.value    = 20.0f + (float)(idx - LB_PARAM_COUNT) * 1.25f;
+        v.decimals = 2;
     }
     return v;
+}
+
+/**
+ * Async-measurement fault: report a nonzero ttt so the sensor engine
+ * stays MEASURING until a break (standard) or valid addressed command
+ * (concurrent) aborts it. Without the fault, return 0 — the engine's
+ * ttt==0 path reads the values synchronously, byte-identical to the
+ * no-callback setup this replaces.
+ */
+static uint16_t lb_start_measurement(uint8_t group, sdi12_meas_type_t type,
+                                     void *user_data)
+{
+    (void)group;
+    (void)type;
+    loopback_priv_t *p = (loopback_priv_t *)user_data;
+    return (p->faults & LB_FAULT_ASYNC_MEAS) ? 5 : 0;
 }
 
 /**
@@ -248,8 +267,8 @@ static int lb_open(hal_t *self, const hal_serial_config_t *cfg) {
     cb.send_response = lb_send_response;
     cb.read_param    = lb_read_param;
     cb.format_binary_page = lb_format_binary_page;
+    cb.start_measurement  = lb_start_measurement;  /* 0 unless async fault */
     cb.user_data     = p;
-    /* No start_measurement/service_request → sync measurements (ttt=0) */
 
     if (sdi12_sensor_init(&p->sensor, p->addr, &ident, &cb) != SDI12_OK)
         return -1;
@@ -266,6 +285,14 @@ static int lb_open(hal_t *self, const hal_serial_config_t *cfg) {
             sdi12_sensor_register_param(&p->sensor, 0, shef[i], unit[i], 2);
         }
     }
+
+    /* Register two additional groups so the aM1-9!/aC1-9!/aR1-9!
+     * battery exercises real group handling in self-test (groups 3-9
+     * stay empty and legitimately answer a0000). */
+    sdi12_sensor_register_param(&p->sensor, 1, "ET",  "mm",    2);
+    sdi12_sensor_register_param(&p->sensor, 1, "WND", "m/s",   1);
+    sdi12_sensor_register_param(&p->sensor, 2, "PH",  "pH",    1);
+    sdi12_sensor_register_param(&p->sensor, 2, "EC",  "uS/cm", 0);
 
     return 0;
 }

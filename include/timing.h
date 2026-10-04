@@ -53,6 +53,7 @@ typedef struct {
     /* Configuration */
     bool                use_rts;
     bool                binary_recv_mode; /**< When set, recv doesn't stop at newline. */
+    bool                loopback;  /**< HAL is the in-memory loopback (self-test). */
 } timing_ctx_t;
 
 /**

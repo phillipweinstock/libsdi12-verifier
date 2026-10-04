@@ -9,6 +9,7 @@
  * Spec section references follow the SDI-12 v1.4 (February 2023) document.
  */
 #include "verifier.h"
+#include "hal_loopback.h"
 #include "sdi12.h"
 #include "sdi12_master.h"
 #include <stdarg.h>
@@ -733,7 +734,23 @@ static test_result_t test_address_change(timing_ctx_t *ctx, char addr) {
  *  §4.2.1 — Break during measurement must reset sensor state
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* In loopback self-test the simulated sensor is synchronous unless the
+ * async fault is set — no in-flight measurement, hence nothing to
+ * abort. The wrapper flips the fault for the duration of this test and
+ * CLEARS it unconditionally on every path, so the shared simulated
+ * sensor is back to synchronous (ttt=0) for the rest of the battery.
+ * Live hardware is untouched and keeps its legitimate ttt=0 skip. */
+static test_result_t test_break_abort_inner(timing_ctx_t *ctx, char addr);
 static test_result_t test_break_abort(timing_ctx_t *ctx, char addr) {
+    if (ctx->loopback)
+        hal_loopback_set_faults(ctx->hal, LB_FAULT_ASYNC_MEAS);
+    test_result_t r = test_break_abort_inner(ctx, addr);
+    if (ctx->loopback)
+        hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
+    return r;
+}
+
+static test_result_t test_break_abort_inner(timing_ctx_t *ctx, char addr) {
     test_result_t r = TEST_RESULT("Break Aborts Measurement", "\xc2\xa7" "4.4.5.1");
 
     sdi12_master_send_break(timing_master(ctx));
@@ -788,7 +805,17 @@ static test_result_t test_break_abort(timing_ctx_t *ctx, char addr) {
  *  Concurrent Abort by Addressed Command (§4.4.7.1)
  * ══════════════════════════════════════════════════════════════════════ */
 
+static test_result_t test_concurrent_abort_inner(timing_ctx_t *ctx, char addr);
 static test_result_t test_concurrent_abort(timing_ctx_t *ctx, char addr) {
+    if (ctx->loopback)
+        hal_loopback_set_faults(ctx->hal, LB_FAULT_ASYNC_MEAS);
+    test_result_t r = test_concurrent_abort_inner(ctx, addr);
+    if (ctx->loopback)
+        hal_loopback_set_faults(ctx->hal, LB_FAULT_NONE);
+    return r;
+}
+
+static test_result_t test_concurrent_abort_inner(timing_ctx_t *ctx, char addr) {
     test_result_t r = TEST_RESULT("Concurrent Abort on Addressed Command",
                                   "\xc2\xa7" "4.4.7.1");
 

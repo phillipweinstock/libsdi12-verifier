@@ -201,6 +201,12 @@ int verifier_init(verifier_ctx_t *ctx) {
         return -1;
     }
 
+    /* Loopback HALs can host the simulated-sensor fault modes the
+     * self-test battery drives (async measurements, extra groups);
+     * live serial ports cannot, so the battery keeps its real-hardware
+     * skips there. */
+    ctx->timing.loopback = ctx->self_test;
+
     const char *mode_name =
         ctx->self_test                  ? "Self-Test (Loopback)" :
         ctx->mode == MODE_SENSOR_TEST   ? "Sensor Compliance" :

@@ -31,6 +31,15 @@ typedef enum {
      *  sensor answering on the bus. The master must reject the packet. */
     LB_FAULT_FOREIGN_BIN_ADDR = 1u << 1,
 
+    /** Measurements become asynchronous (start_measurement returns
+     *  ttt=5): the simulated sensor stays in-flight until a break or
+     *  a valid addressed command aborts it, letting the break-abort
+     *  (§4.4.5.1) and concurrent-abort (§4.4.7.1) battery tests exercise
+     *  the engine's abort state machines without real hardware.
+     *  Without the fault, start_measurement returns 0 and the sensor
+     *  is byte-identical to the plain synchronous setup. */
+    LB_FAULT_ASYNC_MEAS  = 1u << 2,
+
     /** Sensor responses arrive paced at ~2 ms per byte instead of
      *  instantaneously — a mild stand-in for a real 1200-baud line
      *  (8.33 ms per character). Any recv implementation that treats
